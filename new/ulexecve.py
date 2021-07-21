@@ -42,6 +42,7 @@ def bincode_memcpy(dst, src, sz):
         struct.pack("<Q", dst), \
         struct.pack("<Q", sz) \
     )
+    logging.debug("memcpy(0x%.8x, 0x%.8x, 0x%.8x)" % (dst, src, sz))
     return buf
 
 def bincode_mprotect(addr, length, prot):
@@ -206,18 +207,24 @@ class Stack:
         stack = self.stack
         # argv starts with amount of args and is ultimately NULL terminated
         stack[0] = c_size_t(len(argv))
-        for i, arg in enumerate(argv):
+        i = 0
+        for arg in argv:
             buf = ctypes.create_string_buffer(arg)
             self.add_ref(buf)
-            stack[i + 1] = ctypes.addressof(buf) 
+            i = i + 1
+            stack[i] = ctypes.addressof(buf) 
         stack[i + 1] = c_size_t(0)
+        i = i + 1
 
         # envp does not have a preceding count and is ultimately NULL terminated
         env_off = i
-        for i, env in enumerate(envp):
+        for env in envp:
             buf = ctypes.create_string_buffer(env)
             self.add_ref(buf)
+            i = i + 1
             stack[i + env_off + 1] = ctypes.addressof(buf)
+        stack[i + env_off + 1] = c_size_t(0)
+        i = i + 1
 
         aux_off = i + env_off
 
@@ -265,8 +272,12 @@ class Stack:
                 logging.debug("  %.8x:   0x%.16x" % (i*8, stack[i]))
 
 
-def bincode_jumpbuf(stack_ptr, entry_ptr):
-    buf = b"\x48\xbc%s\x48\xb9%s\x48\x31\xd2\xff\xe1" % \
+def bincode_jumpbuf(stack_ptr, entry_ptr, jump_delay=False):
+    buf = b""
+    if jump_delay:
+        buf += b"""\x48\x31\xf6\x56\x6a\x03\x54\x5f\x6a\x23\x58\x0f\x05"""
+        buf += b"\x48\x89\xe5"
+    buf += b"\x48\xbc%s\x48\xb9%s\x48\x31\xd2\xff\xe1" % \
             (struct.pack("<Q", stack_ptr),
              struct.pack("<Q", entry_ptr))
     return buf
@@ -281,7 +292,7 @@ def prepare_jumpbuf(buf):
     return ctypes.cast(dst, ctypes.CFUNCTYPE(c_void_p))
         
 
-def elf_execute(exe, binary, args, show_jumpbuf=False):
+def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
     PF_R = 0x4
     PF_W = 0x2
     PF_X = 0x1
@@ -291,6 +302,9 @@ def elf_execute(exe, binary, args, show_jumpbuf=False):
     envp = []
     for name in os.environ:
         envp.append("%s=%s" % (name, os.environ[name]))
+
+    argv=[]
+    envp=[]
     stack.setup(argv, envp, exe)
 
     jumpbuf = []
@@ -312,7 +326,7 @@ def elf_execute(exe, binary, args, show_jumpbuf=False):
         code = bincode_mprotect(PAGE_FLOOR(dst), PAGE_CEIL(memsz), prot)
         jumpbuf.append(code)
 
-    jumpbuf.append(bincode_jumpbuf(stack.base, exe.entry_point))
+    jumpbuf.append(bincode_jumpbuf(stack.base, exe.entry_point, jump_delay))
     buf = b"".join(jumpbuf)
 
     if show_jumpbuf:
@@ -328,6 +342,7 @@ def main():
                                      epilog="Copyright (C) 2021 - Anvil Secure")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--show-jumpbuf", action="store_true")
+    parser.add_argument("--jump-delay", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="<binary> [arguments] (eg. /bin/ls /tmp)")
     ns = parser.parse_args(sys.argv[1:])
 
@@ -343,7 +358,7 @@ def main():
         elf = ELFParser(fd)
         elf.parse()
 
-    elf_execute(elf, binary, args, ns.show_jumpbuf)
+    elf_execute(elf, binary, args, ns.show_jumpbuf, ns.jump_delay)
 
 if __name__ == "__main__":
     main()
