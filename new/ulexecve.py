@@ -207,23 +207,23 @@ class Stack:
         stack = self.stack
         # argv starts with amount of args and is ultimately NULL terminated
         stack[0] = c_size_t(len(argv))
-        i = 0
+        i = 1
         for arg in argv:
             buf = ctypes.create_string_buffer(arg)
             self.add_ref(buf)
-            i = i + 1
             stack[i] = ctypes.addressof(buf) 
+            i = i + 1
         stack[i + 1] = c_size_t(0)
-        i = i + 1
+        env_off = i+1
 
         # envp does not have a preceding count and is ultimately NULL terminated
-        env_off = i
+        i = 0
         for env in envp:
             buf = ctypes.create_string_buffer(env)
             self.add_ref(buf)
+            stack[i + env_off] = ctypes.addressof(buf)
             i = i + 1
-            stack[i + env_off + 1] = ctypes.addressof(buf)
-        stack[i + env_off + 1] = c_size_t(0)
+        stack[i + env_off] = c_size_t(0)
         i = i + 1
 
         aux_off = i + env_off
@@ -303,8 +303,6 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
     for name in os.environ:
         envp.append("%s=%s" % (name, os.environ[name]))
 
-    argv=[]
-    envp=[]
     stack.setup(argv, envp, exe)
 
     jumpbuf = []
