@@ -348,6 +348,7 @@ def main():
 
     if len(ns.command) == 0:
         parser.print_help()
+        sys.exit(1)
 
     logging.basicConfig(format="%(message)s", level=logging.DEBUG if ns.debug else logging.INFO)
 
