@@ -220,7 +220,8 @@ class Stack:
         stack[0] = c_size_t(len(argv))
         i = 1
         for arg in argv:
-            buf = ctypes.create_string_buffer(bytes(arg, encoding="utf-8", errors="ignore"))
+            enc = arg.encode("utf-8", errors="ignore")
+            buf = ctypes.create_string_buffer(enc)
             self.add_ref(buf)
             stack[i] = ctypes.addressof(buf) 
             i = i + 1
@@ -230,7 +231,8 @@ class Stack:
         # envp does not have a preceding count and is ultimately NULL terminated
         i = 0
         for env in envp:
-            buf = ctypes.create_string_buffer(bytes(env, encoding="utf-8", errors="ignore"))
+            enc = arg.encode("utf-8", errors="ignore")
+            buf = ctypes.create_string_buffer(enc)
             self.add_ref(buf)
             stack[i + env_off] = ctypes.addressof(buf)
             i = i + 1
@@ -318,7 +320,7 @@ def display_jumpbuf(buf):
             logging.error("objdump not found in $PATH or not installed")
             sys.exit(1)
 
-        logging.info(output)
+        logging.info(output.decode("utf-8", errors="ignore"))
 
 def get_phentries_setup_code(exe):
     PF_R = 0x4
