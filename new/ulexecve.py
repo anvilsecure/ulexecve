@@ -213,7 +213,7 @@ class Stack:
         # in memory properly as there will be a reference to it
         self.refs.append(obj)
 
-    def setup(self, argv, envp, exe, interp=None):
+    def setup(self, argv, envp, exe, interp=None, show_stack=False):
         stack = self.stack
         # argv starts with amount of args and is ultimately NULL terminated
         stack[0] = c_size_t(len(argv))
@@ -242,7 +242,7 @@ class Stack:
 
         end_off = self.setup_auxv(aux_off, exe, interp)
 
-        self.setup_debug(env_off, aux_off, end_off)
+        self.setup_debug(env_off, aux_off, end_off, show_stack)
 
     def setup_auxv(self, off, exe, interp=None):
         auxv_ptr = self.base + (off << 3)
@@ -270,20 +270,24 @@ class Stack:
         stack[off + 17] = 0
         return off + 17
 
-    def setup_debug(self, env_off, aux_off, end):
+    def setup_debug(self, env_off, aux_off, end, show_stack = False):
+        # stack is shown if user explicitly asks for it or if we are in
+        # debugging mode
+        log = logging.debug if not show_stack else logging.info
         stack = self.stack
-        logging.debug("stack contents:")
-        logging.debug(" argv")
+        ret = []
+        log("stack contents:")
+        log(" argv")
         for i in range(0, end):
             if i == env_off:
-                logging.debug(" envp")
+                log(" envp")
             elif i >= aux_off:
                 if i == aux_off:
-                    logging.debug(" auxv")
+                    log(" auxv")
                 if (i - aux_off) % 2 == 1:
-                    logging.debug("  %.8x:   0x%.16x 0x%.16x" % ((i-1)*8, stack[i-1], stack[i]))
+                    log("  %.8x:   0x%.16x 0x%.16x" % ((i-1)*8, stack[i-1], stack[i]))
             else:
-                logging.debug("  %.8x:   0x%.16x" % (i*8, stack[i]))
+                log("  %.8x:   0x%.16x" % (i*8, stack[i]))
 
 
 def bincode_jumpbuf(stack_ptr, entry_ptr, jump_delay=False):
@@ -361,7 +365,7 @@ def get_phentries_setup_code(exe):
     return b"".join(buf)
 
 
-def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
+def elf_execute(exe, binary, args, show_jumpbuf=False, show_stack=False, jump_delay=False):
 
     # load interpreter as well if needed
     if exe.interp:
@@ -383,7 +387,7 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
     for name in os.environ:
         envp.append("%s=%s" % (name, os.environ[name]))
 
-    stack.setup(argv, envp, exe, interp)
+    stack.setup(argv, envp, exe, interp=interp, show_stack=show_stack)
 
     # generate the jump buffer which copies all segments to the right
     # locations in memory, sets the correct protection flags on those
@@ -413,8 +417,9 @@ def main():
     parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary, any arguments to it and then sit back and pray.",
                                      usage="%(prog)s [options] <binary> [arguments]",
                                      epilog="Copyright (C) 2021 - Anvil Secure\n")
-    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--debug", action="store_true", help="output info useful for debugging a crashing binary")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
+    parser.add_argument("--show-stack", action="store_true", help="show stack contents")
     parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="<binary> [arguments] (eg. /bin/ls /tmp)")
     ns = parser.parse_args(sys.argv[1:])
@@ -425,12 +430,13 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    if ns.jump_delay and ns.jump_delay < 0:
-        logging.error("jump delay cannot be negative")
-        sys.exit(1)
-    elif ns.jump_delay > 300:
-        logging.error("jump delay cannot be bigger than 300")
-        sys.exit(1)
+    if ns.jump_delay:
+        if ns.jump_delay < 0:
+            logging.error("jump delay cannot be negative")
+            sys.exit(1)
+        elif ns.jump_delay > 300:
+            logging.error("jump delay cannot be bigger than 300")
+            sys.exit(1)
 
     binary = ns.command[0]
     args = ns.command[1:]
@@ -443,7 +449,7 @@ def main():
             logging.error("Error while parsing binary: %s" % e)
             sys.exit(1)
 
-    elf_execute(elf, binary, args, ns.show_jumpbuf, ns.jump_delay)
+    elf_execute(elf, binary, args, ns.show_jumpbuf, ns.show_stack, ns.jump_delay)
 
 if __name__ == "__main__":
     main()
