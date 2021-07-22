@@ -1,15 +1,15 @@
 #!/usr/bin/env python2
 
 import argparse
-import sys
-import struct
 import ctypes
-from ctypes.util import find_library
-from ctypes import c_void_p, c_size_t, c_int, memmove
 import logging
 import os
-import tempfile
+import struct
 import subprocess
+import sys
+import tempfile
+from ctypes import c_int, c_size_t, c_void_p, memmove
+from ctypes.util import find_library
 
 libc = ctypes.CDLL(find_library('c'))
 
