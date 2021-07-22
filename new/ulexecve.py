@@ -245,7 +245,6 @@ class Stack:
     def setup_auxv(self, off, exe, interp=None):
         auxv_ptr = self.base + (off << 3)
         exe_loc = exe.mapping
-        print(exe.mapping)
         interp_loc = interp.mapping if interp else exe_loc
         logging.debug("AT_BASE set to 0x%.16x from %s" % (interp_loc, "interp" if interp else "exe"))
         stack = self.stack
