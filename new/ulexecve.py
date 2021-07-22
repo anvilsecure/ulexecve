@@ -311,6 +311,7 @@ def bincode_jumpbuf(stack_ptr, entry_ptr, jump_delay=False):
     buf += b"\x48\xbc%s\x48\xb9%s\x48\x31\xd2\xff\xe1" % \
             (struct.pack("<Q", stack_ptr),
              struct.pack("<Q", entry_ptr))
+    logging.debug("Return jumpbuf with entry: 0x%.16x and stack: 0x%.16x" % (stack_ptr, entry_ptr))
     return buf
 
 def prepare_jumpbuf(buf):
@@ -377,6 +378,7 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, show_stack=False, jump_de
             except ELFParsingError as e:
                 logging.error("Error while parsing binary: %s" % e)
                 sys.exit(1)
+        elf_execute.interp = interp
     else:
         interp = None
 
