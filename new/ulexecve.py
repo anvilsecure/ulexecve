@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 
 import argparse
 import ctypes
@@ -39,7 +39,7 @@ def bincode_memcpy(dst, src, sz):
 90 00 00
     """
 
-    buf = "\x48\xbe%s\x48\xbf%s\x48\xb9%s\xf3\xa4" % ( \
+    buf = b"\x48\xbe%s\x48\xbf%s\x48\xb9%s\xf3\xa4" % ( \
         struct.pack("<Q", src), \
         struct.pack("<Q", dst), \
         struct.pack("<Q", sz) \
@@ -58,7 +58,7 @@ def bincode_mprotect(addr, length, prot):
 0f 05                   syscall
 48 31 c0                xor %rax, %rax
     """
-    buf = "\x48\xc7\xc0\x0a\x00\x00\x00\x48\xbf%s\x48\xbe%s\x48\xc7\xc2%s\x0f\x05" % ( \
+    buf = b"\x48\xc7\xc0\x0a\x00\x00\x00\x48\xbf%s\x48\xbe%s\x48\xc7\xc2%s\x0f\x05" % ( \
 		struct.pack("<Q", addr), \
 		struct.pack("<Q", length), \
 		struct.pack("<L", prot), \
@@ -220,7 +220,7 @@ class Stack:
         stack[0] = c_size_t(len(argv))
         i = 1
         for arg in argv:
-            buf = ctypes.create_string_buffer(arg)
+            buf = ctypes.create_string_buffer(bytes(arg, encoding="utf-8", errors="ignore"))
             self.add_ref(buf)
             stack[i] = ctypes.addressof(buf) 
             i = i + 1
@@ -230,7 +230,7 @@ class Stack:
         # envp does not have a preceding count and is ultimately NULL terminated
         i = 0
         for env in envp:
-            buf = ctypes.create_string_buffer(env)
+            buf = ctypes.create_string_buffer(bytes(env, encoding="utf-8", errors="ignore"))
             self.add_ref(buf)
             stack[i + env_off] = ctypes.addressof(buf)
             i = i + 1
