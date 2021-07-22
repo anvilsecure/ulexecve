@@ -83,6 +83,7 @@ class ELFParser:
         self.stream = stream
         self.is_pie = False
         self.interp_offset = 0
+        self.interp = None
         self.mapping = None
         self.entry_point = 0
         self.ph_entries = []
@@ -157,6 +158,14 @@ class ELFParser:
                 self.ph_entries.append(pentry)
             elif p_type == ELFParser.PT_INTERP:
                 self.interp_offset = p_offset
+                off = self.stream.tell()
+                self.stream.seek(p_offset)
+                self.interp = self.stream.read(p_filesz)
+
+                # strip off the last byte as that is a 0-byte and it will cause
+                # pathname encoding problems later otherwise
+                self.interp = self.interp[:-1]
+                self.stream.seek(off)
             else:
                 continue
 
@@ -203,7 +212,7 @@ class Stack:
         # in memory properly as there will be a reference to it
         self.refs.append(obj)
 
-    def setup(self, argv, envp, exe):
+    def setup(self, argv, envp, exe, interp=None):
         stack = self.stack
         # argv starts with amount of args and is ultimately NULL terminated
         stack[0] = c_size_t(len(argv))
@@ -228,16 +237,18 @@ class Stack:
 
         aux_off = i + env_off
 
-        end_off = self.setup_auxv(aux_off, exe, exe)
+        end_off = self.setup_auxv(aux_off, exe, interp)
 
         self.setup_debug(env_off, aux_off, end_off)
 
-    def setup_auxv(self, off, exe, interp):
+    def setup_auxv(self, off, exe, interp=None):
         auxv_ptr = self.base + (off << 3)
         exe_loc = exe.mapping
+        interp_loc = interp.mapping if interp else exe_loc
+        logging.debug("AT_BASE set to 0x%.16x from %s" % (interp_loc, "interp" if interp else "exe"))
         stack = self.stack
         stack[off] = Stack.AT_BASE
-        stack[off + 1] = exe_loc
+        stack[off + 1] = interp_loc
         stack[off + 2] = Stack.AT_PHDR
         stack[off + 3] = exe_loc + exe.e_phoff
         stack[off + 4] = Stack.AT_ENTRY
@@ -290,22 +301,13 @@ def prepare_jumpbuf(buf):
     ret = mprotect(PAGE_FLOOR(dst), PAGE_CEIL(len(buf)), PROT_READ | PROT_EXEC)
 
     return ctypes.cast(dst, ctypes.CFUNCTYPE(c_void_p))
-        
 
-def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
+def get_phentries_setup_code(exe):
     PF_R = 0x4
     PF_W = 0x2
     PF_X = 0x1
 
-    stack = Stack(2048)
-    argv = [binary] + args
-    envp = []
-    for name in os.environ:
-        envp.append("%s=%s" % (name, os.environ[name]))
-
-    stack.setup(argv, envp, exe)
-
-    jumpbuf = []
+    buf = []
     for entry in exe.ph_entries:
 
         dst = exe.virtual_offset + entry["vaddr"]
@@ -314,7 +316,7 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
         memsz = entry["memsz"]
 
         code = bincode_memcpy(dst, src, sz)
-        jumpbuf.append(code)
+        buf.append(code)
 
         flags = entry["flags"]
         prot = PROT_READ if (flags & PF_R) != 0 else 0
@@ -322,9 +324,37 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
         prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
         code = bincode_mprotect(PAGE_FLOOR(dst), PAGE_CEIL(memsz), prot)
-        jumpbuf.append(code)
+        buf.append(code)
 
-    jumpbuf.append(bincode_jumpbuf(stack.base, exe.entry_point, jump_delay))
+    return b"".join(buf)
+
+
+def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
+    if exe.interp:
+        logging.debug("dynamically linked library so load interpreter %s too" % exe.interp)
+        with open(exe.interp, "rb") as fd:
+            interp = ELFParser(fd)
+            interp.parse()
+    else:
+        interp = None
+
+
+    stack = Stack(2048)
+    argv = [binary] + args
+    envp = []
+    for name in os.environ:
+        envp.append("%s=%s" % (name, os.environ[name]))
+
+    stack.setup(argv, envp, exe, interp)
+
+    jumpbuf = []
+    jumpbuf.append(get_phentries_setup_code(exe))
+    if interp:
+        jumpbuf.append(get_phentries_setup_code(interp))
+
+    entry_point = interp.entry_point if interp else exe.entry_point
+
+    jumpbuf.append(bincode_jumpbuf(stack.base, entry_point, jump_delay))
     buf = b"".join(jumpbuf)
 
     if show_jumpbuf:
