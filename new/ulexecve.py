@@ -31,14 +31,13 @@ MAP_GROWSDOWN = 0x0100
 
 def bincode_memcpy(dst, src, sz):
     """
-48 be 41 41 41 41 41    movabs $0x414141414141,%rsi  ; source
-41 00 00
-48 bf 61 61 61 61 61    movabs $0x616161616161,%rdi  ; destination
-61 00 00
-48 b9 90 90 90 90 90    movabs $0x909090909090,%rcx ; length
-90 00 00
+    48 be 41 41 41 41 41    movabs $0x414141414141,%rsi  ; source
+    41 00 00
+    48 bf 61 61 61 61 61    movabs $0x616161616161,%rdi  ; destination
+    61 00 00
+    48 b9 90 90 90 90 90    movabs $0x909090909090,%rcx ; length
+    90 00 00
     """
-
     buf = b"\x48\xbe%s\x48\xbf%s\x48\xb9%s\xf3\xa4" % ( \
         struct.pack("<Q", src), \
         struct.pack("<Q", dst), \
@@ -49,14 +48,14 @@ def bincode_memcpy(dst, src, sz):
 
 def bincode_mprotect(addr, length, prot):
     """
-48 c7 c0 0a 00 00 00    mov    $0xa,%rax
-48 bf 41 41 41 41 41    movabs $0x41414141414141,%rdi
-41 41 00
-48 be 42 42 42 42 42    movabs $0x42424242424242,%rsi
-42 42 00
-48 c7 c2 04 00 00 00    mov    $0x4,%rdx
-0f 05                   syscall
-48 31 c0                xor %rax, %rax
+    48 c7 c0 0a 00 00 00    mov    $0xa,%rax
+    48 bf 41 41 41 41 41    movabs $0x41414141414141,%rdi
+    41 41 00
+    48 be 42 42 42 42 42    movabs $0x42424242424242,%rsi
+    42 42 00
+    48 c7 c2 04 00 00 00    mov    $0x4,%rdx
+    0f 05                   syscall
+    48 31 c0                xor %rax, %rax
     """
     buf = b"\x48\xc7\xc0\x0a\x00\x00\x00\x48\xbf%s\x48\xbe%s\x48\xc7\xc2%s\x0f\x05" % ( \
 		struct.pack("<Q", addr), \
@@ -290,8 +289,21 @@ class Stack:
 def bincode_jumpbuf(stack_ptr, entry_ptr, jump_delay=False):
     buf = b""
     if jump_delay:
-        buf += b"""\x48\x31\xf6\x56\x6a\x03\x54\x5f\x6a\x23\x58\x0f\x05"""
-        buf += b"\x48\x89\xe5"
+        """
+        48 31 f6                xor    %rsi,%rsi
+        56                      push   %rsi
+        68 55 a0 fc 01          pushq  $0x1fca055
+        54                      push   %rsp
+        5f                      pop    %rdi
+        6a 23                   pushq  $0x23
+        58                      pop    %rax
+        0f 05                   syscall
+        """
+        buf += b"\x48\x31\xf6\x56\x68"
+        buf += struct.pack("<L", jump_delay)
+        buf += b"\x54\x5f\x6a\x23\x58\x0f\x05"
+        #buf += b"\x48\x89\xe5"   mov %rsp, %rbp
+
     buf += b"\x48\xbc%s\x48\xb9%s\x48\x31\xd2\xff\xe1" % \
             (struct.pack("<Q", stack_ptr),
              struct.pack("<Q", entry_ptr))
@@ -403,15 +415,22 @@ def main():
                                      epilog="Copyright (C) 2021 - Anvil Secure\n")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
-    parser.add_argument("--jump-delay", action="store_true")
+    parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="<binary> [arguments] (eg. /bin/ls /tmp)")
     ns = parser.parse_args(sys.argv[1:])
+
+    logging.basicConfig(format="%(message)s", level=logging.DEBUG if ns.debug else logging.INFO)
 
     if len(ns.command) == 0:
         parser.print_help()
         sys.exit(1)
 
-    logging.basicConfig(format="%(message)s", level=logging.DEBUG if ns.debug else logging.INFO)
+    if ns.jump_delay and ns.jump_delay < 0:
+        logging.error("jump delay cannot be negative")
+        sys.exit(1)
+    elif ns.jump_delay > 300:
+        logging.error("jump delay cannot be bigger than 300")
+        sys.exit(1)
 
     binary = ns.command[0]
     args = ns.command[1:]
