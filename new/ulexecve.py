@@ -83,7 +83,6 @@ class ELFParser:
     def __init__(self, stream):
         self.stream = stream
         self.is_pie = False
-        self.interp_offset = 0
         self.interp = None
         self.mapping = None
         self.entry_point = 0
@@ -158,7 +157,6 @@ class ELFParser:
                 pentry = {"flags":p_flags, "memsz":p_memsz, "vaddr":p_vaddr, "filesz":p_filesz, "offset":p_offset, "data":data}
                 self.ph_entries.append(pentry)
             elif p_type == ELFParser.PT_INTERP:
-                self.interp_offset = p_offset
                 off = self.stream.tell()
                 self.stream.seek(p_offset)
                 self.interp = self.stream.read(p_filesz)
@@ -247,6 +245,7 @@ class Stack:
     def setup_auxv(self, off, exe, interp=None):
         auxv_ptr = self.base + (off << 3)
         exe_loc = exe.mapping
+        print(exe.mapping)
         interp_loc = interp.mapping if interp else exe_loc
         logging.debug("AT_BASE set to 0x%.16x from %s" % (interp_loc, "interp" if interp else "exe"))
         stack = self.stack
