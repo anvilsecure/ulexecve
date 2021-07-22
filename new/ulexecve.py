@@ -376,7 +376,6 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, show_stack=False, jump_de
             except ELFParsingError as e:
                 logging.error("Error while parsing binary: %s" % e)
                 sys.exit(1)
-        elf_execute.interp = interp
     else:
         interp = None
 
