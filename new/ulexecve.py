@@ -8,6 +8,8 @@ from ctypes.util import find_library
 from ctypes import c_void_p, c_size_t, c_int, memmove
 import logging
 import os
+import tempfile
+import subprocess
 
 libc = ctypes.CDLL(find_library('c'))
 
@@ -302,6 +304,22 @@ def prepare_jumpbuf(buf):
 
     return ctypes.cast(dst, ctypes.CFUNCTYPE(c_void_p))
 
+def display_jumpbuf(buf):
+    with tempfile.NamedTemporaryFile(suffix=".jumpbuf.bin", mode="wb") as tmp:
+        tmp.write(buf)
+        tmp.seek(0)
+        logging.debug("written jumpbuf to %s" % tmp.name)
+        # To disassemble run the following with temp filename  appended to it
+        cmd = "objdump -m i386:x86-64 -b binary -D %s" % tmp.name
+        logging.debug("executing %s" % cmd)
+        try:
+            output = subprocess.check_output(cmd.split(" "))
+        except OSError as e:
+            logging.error("objdump not found in $PATH or not installed")
+            sys.exit(1)
+
+        logging.info(output)
+
 def get_phentries_setup_code(exe):
     PF_R = 0x4
     PF_W = 0x2
@@ -365,24 +383,24 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
     # entry point is from the interpreter if binary has one
     entry_point = interp.entry_point if interp else exe.entry_point
     jumpbuf.append(bincode_jumpbuf(stack.base, entry_point, jump_delay))
-    buf = b"".join(jumpbuf)
+    jumpbuf = b"".join(jumpbuf)
 
     if show_jumpbuf:
-        open("jumpbuf.bin", "w").write(buf)
+        display_jumpbuf(jumpbuf)
 
     # full buffer of instructions setup, now all we need to do is map this to
     # memory and set it such that that segment is executable so we can jump
     # into it
-    cfunction = prepare_jumpbuf(buf)
+    cfunction = prepare_jumpbuf(jumpbuf)
     cfunction()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary and any arguments to it and then sit back and pray.",
+    parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary, any arguments to it and then sit back and pray.",
                                      usage="%(prog)s [options] <binary> [arguments]",
-                                     epilog="Copyright (C) 2021 - Anvil Secure")
+                                     epilog="Copyright (C) 2021 - Anvil Secure\n")
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--show-jumpbuf", action="store_true")
+    parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
     parser.add_argument("--jump-delay", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="<binary> [arguments] (eg. /bin/ls /tmp)")
     ns = parser.parse_args(sys.argv[1:])
