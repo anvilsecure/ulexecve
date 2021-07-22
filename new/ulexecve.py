@@ -330,15 +330,21 @@ def get_phentries_setup_code(exe):
 
 
 def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
+
+    # load interpreter as well if needed
     if exe.interp:
         logging.debug("dynamically linked library so load interpreter %s too" % exe.interp)
         with open(exe.interp, "rb") as fd:
-            interp = ELFParser(fd)
-            interp.parse()
+            try:
+                interp = ELFParser(fd)
+                interp.parse()
+            except ELFParsingError as e:
+                logging.error("Error while parsing binary: %s" % e)
+                sys.exit(1)
     else:
         interp = None
 
-
+    # construct a stack with 2k pages
     stack = Stack(2048)
     argv = [binary] + args
     envp = []
@@ -347,19 +353,26 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, jump_delay=False):
 
     stack.setup(argv, envp, exe, interp)
 
+    # generate the jump buffer which copies all segments to the right
+    # locations in memory, sets the correct protection flags on those
+    # memory segments and then prepares for the actual jump into
+    # hail mary land.
     jumpbuf = []
     jumpbuf.append(get_phentries_setup_code(exe))
     if interp:
         jumpbuf.append(get_phentries_setup_code(interp))
 
+    # entry point is from the interpreter if binary has one
     entry_point = interp.entry_point if interp else exe.entry_point
-
     jumpbuf.append(bincode_jumpbuf(stack.base, entry_point, jump_delay))
     buf = b"".join(jumpbuf)
 
     if show_jumpbuf:
         open("jumpbuf.bin", "w").write(buf)
 
+    # full buffer of instructions setup, now all we need to do is map this to
+    # memory and set it such that that segment is executable so we can jump
+    # into it
     cfunction = prepare_jumpbuf(buf)
     cfunction()
 
@@ -385,7 +398,11 @@ def main():
 
     with open(binary, "rb") as fd:
         elf = ELFParser(fd)
-        elf.parse()
+        try:
+            elf.parse()
+        except ELFParsingError as e:
+            logging.error("Error while parsing binary: %s" % e)
+            sys.exit(1)
 
     elf_execute(elf, binary, args, ns.show_jumpbuf, ns.jump_delay)
 
