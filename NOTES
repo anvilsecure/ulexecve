@@ -56,3 +56,8 @@ mmap(0x7fc478f85000, 8192, PROT_READ, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x
 mmap(0x400000, 20480, PROT_READ|PROT_WRITE|PROT_SEM, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7fc479911000
 --- SIGSEGV {si_signo=SIGSEGV, si_code=SEGV_ACCERR, si_addr=0x400000} ---
 gvb@ix:~/ulexecve/git/new$
+
+
+
+
+we use %r11 as the intermediate register to tie the offset calculation logic together

@@ -50,6 +50,22 @@ def bincode_memcpy(dst, src, sz):
     logging.debug("memcpy(0x%.8x, 0x%.8x, 0x%.8x)" % (dst, src, sz))
     return buf
 
+def bincode_memcpy_from_offset(off, src, sz):
+    """
+    48 bf 48 47 46 45 44    movabs $0x4142434445464748,%rdi
+    43 42 41
+    49 01 3b                add    %rdi,(%r11)
+     49 01 fb                add    %rdi,%r11
+     4c 01 df                add    %r11,%rdi
+    """
+    buf = b"\x48\xbe%s\x48\xbf%s\x4c\x01\xdf\x48\xb9%s\xf3\xa4" % ( \
+        struct.pack("<Q", src), \
+        struct.pack("<Q", off), \
+        struct.pack("<Q", sz) \
+    )
+    logging.debug("memcpy(%%r11 + 0x%.8x, 0x%.8x, 0x%.8x)" % (off, src, sz))
+    return buf
+
 def bincode_mprotect(addr, length, prot):
     """
     48 c7 c0 0a 00 00 00    mov    $0xa,%rax
@@ -65,6 +81,47 @@ def bincode_mprotect(addr, length, prot):
 		struct.pack("<Q", addr), \
 		struct.pack("<Q", length), \
 		struct.pack("<L", prot), \
+    )
+    return buf
+
+def bincode_munmap(addr, length):
+    """
+    48 c7 c0 0b 00 00 00    mov    $0xb,%rax
+    48 bf 66 66 66 66 66    movabs $0x6666666666666666,%rdi  ; addr
+    66 66 66
+    48 be 52 52 52 52 42    movabs $0x4242424252525252,%rsi  ; length
+    42 42 42
+    0f 05                   syscall
+    """
+    buf = b"\x48\xc7\xc0\x0b\x00\x00\x00\x48\xbf%s\x48\xbe%s\x0f\x05" % (
+		struct.pack("<Q", addr),
+		struct.pack("<Q", length)
+    )
+    return buf
+
+def bincode_mmap(addr, length, prot, flags, fd=0xffffffff, offset=0):
+    """
+    48 c7 c0 09 00 00 00    mov    $0x9,%rax
+    48 bf 66 66 66 66 66    movabs $0x6666666666666666,%rdi  ; addr
+    66 66 66
+    48 be 52 52 52 52 42    movabs $0x4242424252525252,%rsi  ; length
+    42 42 42
+    48 c7 c2 7b 00 00 00    mov    $0x7b,%rdx     ; prot
+    49 c7 c2 9a 02 00 00    mov    $0x29a,%r10    ; flags
+    49 c7 c0 ff ff ff ff    mov    $0xffffffffffffffff,%r8 ; fd
+    49 c7 c1 00 00 00 00    mov    $0x0,%r9  ; offset
+    0f 05                   syscall
+    50                      push   %rax
+    4c 8b 1c 24             mov    (%rsp),%r11
+    """
+    # we store the mmap() result in %r11
+    buf = b"\x48\xc7\xc0\x09\x00\x00\x00\x48\xbf%s\x48\xbe%s\x48\xc7\xc2%s\x49\xc7\xc2%s\x49\xc7\xc0%s\x49\xc7\xc1%s\x0f\x05\x50\x4c\x8b\x1c\x24" % (
+		struct.pack("<Q", addr),
+		struct.pack("<Q", length),
+		struct.pack("<L", prot),
+		struct.pack("<L", flags),
+		struct.pack("<L", fd),
+		struct.pack("<L", offset)
     )
     return buf
 
@@ -147,8 +204,10 @@ class ELFParser:
                 if first_pt_load:
                     first_pt_load = False
                     if p_vaddr != 0:
+                        logging.debug("identified as a non-pie executable")
                         adjust = p_vaddr
                     else:
+                        logging.debug("identified as a pie executable")
                         self.is_pie = True
                 map_sz = p_vaddr + p_memsz if (p_vaddr + p_memsz) > map_sz else map_sz
                 logging.debug("total mapping is now 0x%08x based on 0x%08x seg at 0x%x" % (map_sz, p_memsz, p_vaddr))
@@ -173,21 +232,23 @@ class ELFParser:
                 continue
 
         if not self.is_pie:
+            logging.debug("not a pie binary so adjusting map_sz down with 0x%.8x" % adjust)
             map_sz -= adjust
 
-        mapping = munmap(PAGE_FLOOR(adjust), PAGE_CEIL(map_sz))#, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
+        #mapping = munmap(PAGE_FLOOR(adjust), PAGE_CEIL(map_sz))#, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
         #logging.info("munmap result: 0x%.16x", mapping)
 
         # XXX: we really need to move this mmap() out of the way from python land as this will just screw with us completely
         # so we need to do the mmap from the jumpbuffer after we do the munmap()
-        mapping = mmap(PAGE_FLOOR(adjust), PAGE_CEIL(map_sz), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
-        if mapping == -1:
-            raise ELFParsingError("mmap() failed")
-        logging.info("mmap result: 0x%.16x", mapping)
+        #mapping = mmap(PAGE_FLOOR(adjust), PAGE_CEIL(map_sz), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
+        #if mapping == -1:
+        #    raise ELFParsingError("mmap() failed")
+        #logging.info("mmap result: 0x%.16x", mapping)
 
-        self.mapping = mapping
-        self.virtual_offset = mapping if adjust == 0 else 0
-        self.entry_point = self.virtual_offset + self.e_entry
+        self.mapping = PAGE_FLOOR(adjust)
+        self.map_sz = PAGE_CEIL(map_sz)
+        self.virtual_offset = self.mapping if adjust == 0 else 0
+        self.entry_point = adjust + self.e_entry
 
         logging.debug("mapping ELF at 0x%.16x (adjust: 0x%.16x, entry_point: 0x%.16x)" % (self.mapping, adjust, self.entry_point))
 
@@ -359,7 +420,7 @@ def get_phentries_setup_code(exe):
         sz = entry["filesz"]
         memsz = entry["memsz"]
 
-        code = bincode_memcpy(dst, src, sz)
+        code = bincode_memcpy_from_offset(entry["vaddr"] - exe.mapping, src, sz)
         buf.append(code)
 
         flags = entry["flags"]
@@ -367,7 +428,7 @@ def get_phentries_setup_code(exe):
         prot |= (PROT_WRITE if (flags & PF_W) != 0 else 0)
         prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
-        code = bincode_mprotect(PAGE_FLOOR(dst), PAGE_CEIL(memsz), prot)
+        #code = bincode_mprotect(PAGE_FLOOR(dst), PAGE_CEIL(memsz), prot)
         buf.append(code)
 
     return b"".join(buf)
@@ -402,8 +463,15 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, show_stack=False, jump_de
     # memory segments and then prepares for the actual jump into
     # hail mary land.
     jumpbuf = []
+    # XXX
+    if exe.mapping != 0:
+        jumpbuf.append(bincode_munmap(exe.mapping, exe.map_sz))
+    jumpbuf.append(bincode_mmap(exe.mapping, exe.map_sz, PROT_WRITE|PROT_EXEC|PROT_READ, MAP_ANONYMOUS|MAP_PRIVATE))
     jumpbuf.append(get_phentries_setup_code(exe))
     if interp:
+        if interp.mapping != 0:
+            jumpbuf.append(bincode_munmap(interp.mapping, interp.map_sz))
+        jumpbuf.append(bincode_mmap(interp.mapping, interp.map_sz, PROT_WRITE|PROT_EXEC|PROT_READ, MAP_ANONYMOUS|MAP_PRIVATE))
         jumpbuf.append(get_phentries_setup_code(interp))
 
     # entry point is from the interpreter if binary has one
