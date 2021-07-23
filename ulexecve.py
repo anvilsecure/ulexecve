@@ -13,6 +13,10 @@ from ctypes.util import find_library
 
 libc = ctypes.CDLL(find_library('c'))
 
+munmap = libc.munmap
+munmap.argtypes = [c_void_p, c_size_t]
+munmap.restype = c_int
+
 mmap = libc.mmap
 mmap.argtypes = [c_void_p, c_size_t, c_int, c_int, c_int, c_size_t]
 mmap.restype = c_void_p
@@ -24,10 +28,10 @@ mprotect.restype = c_int
 PROT_READ = 0x01
 PROT_WRITE = 0x02
 PROT_EXEC = 0x04
-PROT_SEM = 0x8
 MAP_PRIVATE = 0X02
 MAP_ANONYMOUS = 0x20
 MAP_GROWSDOWN = 0x0100
+MAP_FIXED = 0x10
 
 def bincode_memcpy(dst, src, sz):
     """
@@ -171,9 +175,15 @@ class ELFParser:
         if not self.is_pie:
             map_sz -= adjust
 
-        mapping = mmap(PAGE_FLOOR(adjust), PAGE_CEIL(map_sz), PROT_READ | PROT_WRITE | PROT_SEM, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+        mapping = munmap(PAGE_FLOOR(adjust), PAGE_CEIL(map_sz))#, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
+        #logging.info("munmap result: 0x%.16x", mapping)
+
+        # XXX: we really need to move this mmap() out of the way from python land as this will just screw with us completely
+        # so we need to do the mmap from the jumpbuffer after we do the munmap()
+        mapping = mmap(PAGE_FLOOR(adjust), PAGE_CEIL(map_sz), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
         if mapping == -1:
             raise ELFParsingError("mmap() failed")
+        logging.info("mmap result: 0x%.16x", mapping)
 
         self.mapping = mapping
         self.virtual_offset = mapping if adjust == 0 else 0
@@ -304,7 +314,6 @@ def bincode_jumpbuf(stack_ptr, entry_ptr, jump_delay=False):
         buf += b"\x48\x31\xf6\x56\x68"
         buf += struct.pack("<L", jump_delay)
         buf += b"\x54\x5f\x6a\x23\x58\x0f\x05"
-        #buf += b"\x48\x89\xe5"   mov %rsp, %rbp
 
     buf += b"\x48\xbc%s\x48\xb9%s\x48\x31\xd2\xff\xe1" % \
             (struct.pack("<Q", stack_ptr),
