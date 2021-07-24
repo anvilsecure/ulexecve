@@ -54,9 +54,7 @@ def bincode_memcpy_from_offset(off, src, sz):
     """
     48 bf 48 47 46 45 44    movabs $0x4142434445464748,%rdi
     43 42 41
-    49 01 3b                add    %rdi,(%r11)
-     49 01 fb                add    %rdi,%r11
-     4c 01 df                add    %r11,%rdi
+    4c 01 df                add    %r11,%rdi
     """
     buf = b"\x48\xbe%s\x48\xbf%s\x4c\x01\xdf\x48\xb9%s\xf3\xa4" % ( \
         struct.pack("<Q", src), \
@@ -248,7 +246,7 @@ class ELFParser:
         self.mapping = PAGE_FLOOR(adjust)
         self.map_sz = PAGE_CEIL(map_sz)
         self.virtual_offset = self.mapping if adjust == 0 else 0
-        self.entry_point = adjust + self.e_entry
+        self.entry_point = self.virtual_offset + self.e_entry
 
         logging.debug("mapping ELF at 0x%.16x (adjust: 0x%.16x, entry_point: 0x%.16x)" % (self.mapping, adjust, self.entry_point))
 
@@ -376,7 +374,7 @@ def bincode_jumpbuf(stack_ptr, entry_ptr, jump_delay=False):
         buf += struct.pack("<L", jump_delay)
         buf += b"\x54\x5f\x6a\x23\x58\x0f\x05"
 
-    buf += b"\x48\xbc%s\x48\xb9%s\x48\x31\xd2\xff\xe1" % \
+    buf += b"\x48\xbc%s\x48\xb9%s\x4c\x01\xd9\x48\x31\xd2\xff\xe1" % \
             (struct.pack("<Q", stack_ptr),
              struct.pack("<Q", entry_ptr))
     logging.debug("Return jumpbuf with entry: 0x%.16x and stack: 0x%.16x" % (stack_ptr, entry_ptr))
@@ -429,7 +427,7 @@ def get_phentries_setup_code(exe):
         prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
         #code = bincode_mprotect(PAGE_FLOOR(dst), PAGE_CEIL(memsz), prot)
-        buf.append(code)
+        #buf.append(code)
 
     return b"".join(buf)
 
@@ -476,6 +474,7 @@ def elf_execute(exe, binary, args, show_jumpbuf=False, show_stack=False, jump_de
 
     # entry point is from the interpreter if binary has one
     entry_point = interp.entry_point if interp else exe.entry_point
+    entry_point = entry_point - (interp.mapping if interp else exe.mapping)
     jumpbuf.append(bincode_jumpbuf(stack.base, entry_point, jump_delay))
     jumpbuf = b"".join(jumpbuf)
 
