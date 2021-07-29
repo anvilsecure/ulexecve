@@ -11,7 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from ctypes import c_int, c_size_t, c_void_p, memmove
+from ctypes import c_int, c_size_t, c_void_p, c_ulong, memmove
 from ctypes.util import find_library
 
 libc = ctypes.CDLL(find_library('c'))
@@ -26,6 +26,10 @@ def PAGE_FLOOR(addr):
 def PAGE_CEIL(addr):
     return (PAGE_FLOOR((addr) + PAGE_SIZE - 1))
 
+
+getauxval = libc.getauxval
+getauxval.argtypes = [c_ulong]
+getauxval.restype = c_ulong
 
 mmap = libc.mmap
 mmap.argtypes = [c_void_p, c_size_t, c_int, c_int, c_int, c_size_t]
@@ -224,6 +228,8 @@ class Stack:
     AT_ENTRY = 9
     AT_SECURE = 23
     AT_RANDOM = 25
+    AT_SYSINFO = 32
+    AT_SYSINFO_EHDR = 33
 
     def __init__(self, num_pages):
         self.size = 2048 * PAGE_SIZE
@@ -278,13 +284,20 @@ class Stack:
 
     def setup_auxv(self, off, exe):
         auxv_ptr = self.base + off
+        at_sysinfo_ehdr = getauxval(Stack.AT_SYSINFO_EHDR)
+        logging.debug("Auxv entry AT_SYSINFO_EHDR (vDSO) set to: 0x%.8x" % (at_sysinfo_ehdr))
+
         stack = self.stack
+
+        # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
+        # at this point in time we don't know yet where everything will be
+        # loaded in memory
         stack[off] = Stack.AT_BASE
-        stack[off + 1] = 0x0  # fixed up later by jumpcode
+        stack[off + 1] = 0x0
         stack[off + 2] = Stack.AT_PHDR
-        stack[off + 3] = 0x0  # fixed up later by jumpcode
+        stack[off + 3] = 0x0
         stack[off + 4] = Stack.AT_ENTRY
-        stack[off + 5] = 0x0  # fixed up later by jumpcode
+        stack[off + 5] = 0x0
         stack[off + 6] = Stack.AT_PHNUM
         stack[off + 7] = exe.e_phnum
         stack[off + 8] = Stack.AT_PHENT
@@ -295,9 +308,14 @@ class Stack:
         stack[off + 13] = 0
         stack[off + 14] = Stack.AT_RANDOM
         stack[off + 15] = auxv_ptr  # (should be set to start of auxv for stack cookies)
-        stack[off + 16] = Stack.AT_NULL
+        stack[off + 16] = Stack.AT_SYSINFO  # should be not present or simply zero on x86-64
         stack[off + 17] = 0
-        return off + 17
+        stack[off + 18] = Stack.AT_SYSINFO_EHDR
+        stack[off + 19] = at_sysinfo_ehdr
+        stack[off + 20] = Stack.AT_NULL
+        stack[off + 21] = 0
+
+        return off + 21
 
     def setup_debug(self, env_off, aux_off, end, show_stack = False):
         # stack is shown if user explicitly asks for it or if we are in
