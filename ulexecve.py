@@ -470,7 +470,7 @@ class CodeGenerator:
         # as the mprotect() call to set the page protection flags correctly
         for e in elf.ph_entries:
             src = ctypes.addressof(e["data"])
-            sz, memsz, vaddr, flags = e["filesz"], e["memsz"], e["vaddr"], e["flags"]
+            sz, vaddr, flags = e["filesz"], e["vaddr"], e["flags"]
 
             if not elf.is_pie:
                 vaddr -= elf.ph_entries[0]["vaddr"]
