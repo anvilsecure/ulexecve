@@ -98,7 +98,7 @@ def prepare_jumpbuf(buf):
     logging.debug("Memmove(0x%.8x, 0x%.8x, 0x%.8x)" % (dst, ctypes.addressof(src), len(buf)))
     memmove(dst, src, len(buf))
     ret = mprotect(PAGE_FLOOR(dst), PAGE_CEIL(len(buf)), PROT_READ | PROT_EXEC)
-    if ret == 0:
+    if ret == -1:
         logging.error("Calling mprotect() on jumpbuffer failed")
 
     return ctypes.cast(dst, ctypes.CFUNCTYPE(c_void_p))
