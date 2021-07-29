@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
-import unittest
-import os
 import ctypes
+import os
+import subprocess
+import unittest
 from ctypes.util import find_library
 
 import ulexecve as u
@@ -75,6 +76,30 @@ class TestFlags(unittest.TestCase):
         for x in flags:
             self.assertIn(x, dir(u))
             self.assertEqual(flags[x], getattr(u, x))
+
+
+class TestBinaries(unittest.TestCase):
+    def test_bins(self):
+        # run /bin/cat and /bin/ls and see if those work fine
+        py_fn = u.__file__
+        cat_fn = "/bin/cat"
+        cmd = "echo hello | python %s %s" % (py_fn, cat_fn)
+        output = subprocess.check_output(cmd, shell=True)
+        self.assertEqual(b"hello\n", output)
+
+        cat_fn = "/bin/ls -lha"
+        cmd = "python %s %s %s" % (py_fn, cat_fn, os.path.basename(py_fn))
+        output = subprocess.check_output(cmd, shell=True)
+        self.assertNotEqual(output.find(os.path.basename(py_fn).encode("utf-8")), -1)
+
+    def test_gcc_bins(self):
+        pass
+
+    def test_rust_bins(self):
+        pass
+
+    def test_golang_bins(self):
+        pass
 
 
 if __name__ == "__main__":
