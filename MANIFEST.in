@@ -1,4 +1,3 @@
 include ulexecve.py
 include test.py
 include README.md
-include NOTES
