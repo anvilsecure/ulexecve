@@ -244,7 +244,7 @@ class Stack:
         # in memory properly as there will be a reference to it
         self.refs.append(obj)
 
-    def setup(self, argv, envp, exe, interp=None, show_stack=False):
+    def setup(self, argv, envp, exe, show_stack=False):
         stack = self.stack
         # argv starts with amount of args and is ultimately NULL terminated
         stack[0] = c_size_t(len(argv))
@@ -272,26 +272,19 @@ class Stack:
         aux_off = i + env_off
         self.auxv_start = aux_off << 3
 
-        end_off = self.setup_auxv(aux_off, exe, interp)
+        end_off = self.setup_auxv(aux_off, exe)
 
         self.setup_debug(env_off, aux_off, end_off, show_stack)
 
-    def setup_auxv(self, off, exe, interp=None):
-        auxv_ptr = self.base + (off << 3)
-        exe_loc = 0x0
-        interp_loc = 0x666666666666
-
-        at_entry  = ((exe_loc + exe.e_entry) if exe.e_entry < exe_loc else exe.e_entry)
-        #at_entry = 0x400000 + exe.e_entry
-        #exe_loc = 0x400000
-
+    def setup_auxv(self, off, exe):
+        auxv_ptr = self.base + off
         stack = self.stack
         stack[off] = Stack.AT_BASE
-        stack[off + 1] = interp_loc
+        stack[off + 1] = 0x0  # fixed up later by jumpcode
         stack[off + 2] = Stack.AT_PHDR
-        stack[off + 3] = exe_loc + exe.e_phoff
+        stack[off + 3] = 0x0  # fixed up later by jumpcode
         stack[off + 4] = Stack.AT_ENTRY
-        stack[off + 5] = at_entry
+        stack[off + 5] = 0x0  # fixed up later by jumpcode
         stack[off + 6] = Stack.AT_PHNUM
         stack[off + 7] = exe.e_phnum
         stack[off + 8] = Stack.AT_PHENT
@@ -576,8 +569,7 @@ class ELFExecutor:
         envp = []
         for name in os.environ:
             envp.append("%s=%s" % (name, os.environ[name]))
-        print(envp)
-        stack.setup(argv, envp, self.exe, self.interp, show_stack=show_stack)
+        stack.setup(argv, envp, self.exe, show_stack=show_stack)
 
         # run the code generator to build up the jump buffer
         cg = CodeGenerator(self.exe, self.interp)
