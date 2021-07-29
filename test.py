@@ -3,6 +3,7 @@
 import ctypes
 import os
 import subprocess
+import tempfile
 import unittest
 from ctypes.util import find_library
 
@@ -96,10 +97,36 @@ class TestBinaries(unittest.TestCase):
         pass
 
     def test_rust_bins(self):
-        pass
+        py_fn = u.__file__
+        with tempfile.NamedTemporaryFile(suffix="", mode="wb") as out:
+            with tempfile.NamedTemporaryFile(suffix=".rs", mode="wb") as inp:
+                try:
+                    inp.write(b"fn main(){println!(\"hello world from rust\");}\n")
+                    inp.seek(0)
+                    cmd = "rustc -o %s %s" % (out.name, inp.name)
+                    output = subprocess.check_output(cmd, shell=True)
+                except subprocess.CalledProcessError:
+                    self.skipTest("rust does not seem to be installed so not running rust specific test")
+                    return
+            cmd = "python %s %s" % (py_fn, out.name)
+            output = subprocess.check_output(cmd, shell=True)
+            self.assertEqual(b"hello world from rust\n", output)
 
     def test_golang_bins(self):
-        pass
+        py_fn = u.__file__
+        with tempfile.NamedTemporaryFile(suffix="", mode="wb") as out:
+            with tempfile.NamedTemporaryFile(suffix=".go", mode="wb") as inp:
+                try:
+                    inp.write(b"package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"hello world from golang\")}\n")
+                    inp.seek(0)
+                    cmd = "go build -o %s %s" % (out.name, inp.name)
+                    output = subprocess.check_output(cmd, shell=True)
+                except subprocess.CalledProcessError:
+                    self.skipTest("golang does not seem to be installed to not running golang specific test")
+                    return
+            cmd = "python %s %s" % (py_fn, out.name)
+            output = subprocess.check_output(cmd, shell=True)
+            self.assertEqual(b"hello world from golang\n", output)
 
 
 if __name__ == "__main__":
