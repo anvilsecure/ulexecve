@@ -1,11 +1,12 @@
 import re
 
 import setuptools
+NAME = "ulexecve"
 
 # We could use import obviously but we parse it as some python build systems
 # otherwise pollute namespaces and we might end up with some annoying issues.
 # See https://stackoverflow.com/a/7071358 for a discussion.
-with open("ulexecve.py", "rt") as fd:
+with open("%s.py" % NAME, "rt") as fd:
     verstrline = fd.read()
     regex = r"^__version__ = ['\"]([^'\"]*)['\"]"
     mo = re.search(regex, verstrline, re.M)
@@ -19,7 +20,7 @@ with open("README.md", "r") as fd:
     long_description = fd.read()
 
 setuptools.setup(
-    name="ulexecve",
+    name=NAME,
     version=version,
     author="Anvil Secure Inc.",
     author_email="gvb@anvilsecure.com",
@@ -28,6 +29,7 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/anvilventures/ulexecve",
     keywords="userland execve",
+    py_modules=[NAME],
     classifiers=[
         "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
@@ -42,7 +44,7 @@ setuptools.setup(
     ],
     python_requires='>=2.7',
     entry_points={
-        "console_scripts": ["ulexecve=ulexecve:main"],
+        "console_scripts": ["%s=%s:main" % (NAME, NAME)],
     },
     install_requires=[
     ],
