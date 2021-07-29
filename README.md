@@ -24,3 +24,10 @@ raw instructiosn to copy the data in place over the mapped code of the python in
 
 
 
+## To build and install as a Python package
+
+```
+python setup.py sdist
+python -m pip install --upgrade dist/ulexecve-<version>.tar.gz
+```
+
