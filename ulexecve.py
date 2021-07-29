@@ -382,7 +382,7 @@ class CodeGenerator:
         ret.append(code)
 
         # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack, (5 << 3), self.exe.e_entry)
+        code = self.generate_auxv_fixup(stack, (5 << 3), self.exe.e_entry, self.exe.is_pie)
         ret.append(code)
 
         if self.interp:
@@ -398,16 +398,12 @@ class CodeGenerator:
 
         self.log("Generating jumpcode with entry_point=0x%.16x and stack=0x%.16x" % (entry_point, stack.base))
 
-        # fix up the auxv vector with the proper relative addresses too
-        #code = self.generate_auxv_fixup(stack.base + (stack.auxv_offset << 3))
-        #ret.append(code)
-
         code = self.generate_jumpcode(stack.base, entry_point, jump_delay)
         ret.append(code)
 
         return b"".join(ret)
 
-    def generate_auxv_fixup(self, stack, auxv_offset, map_offset):
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
         """
 	49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
 	43 42 41
@@ -418,9 +414,12 @@ class CodeGenerator:
         """
         # write at location within auxv the value %r11 + map_offset
         auxv_ptr = stack.base + stack.auxv_start + auxv_offset
-        return b"\x49\xbe%s\x4d\x01\xde\x49\xbf%s\x4d\x89\x37" % (
-		struct.pack("<Q", map_offset),
-		struct.pack("<Q", auxv_ptr))
+        ret = []
+        ret.append(b"\x49\xbe%s" % struct.pack("<Q", map_offset))
+        if relative:
+            ret.append(b"\x4d\x01\xde")
+        ret.append(b"\x49\xbf%s\x4d\x89\x37" % (struct.pack("<Q", auxv_ptr)))
+        return b"".join(ret)
 
     def generate_elf_loader(self, elf):
         PF_R = 0x4
