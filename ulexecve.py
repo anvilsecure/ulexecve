@@ -11,7 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from ctypes import c_int, c_size_t, c_void_p, c_ulong, memmove
+from ctypes import c_int, c_size_t, c_ulong, c_void_p, memmove
 from ctypes.util import find_library
 
 __version__ = "0.4"
