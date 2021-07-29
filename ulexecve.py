@@ -42,6 +42,7 @@ def _emulate_getauxval(ltype):
                 return val
     return 0x0
 
+
 # If we run on glibc older than 2.16 we would not have getauxval(), we could
 # then try to emulate it by reading from /proc/<pid>/auxv. That glibc version
 # was released in late 2012 though but let's try and support older or different
@@ -84,7 +85,7 @@ def display_jumpbuf(buf):
         logging.debug("Executing: %s" % cmd)
         try:
             output = subprocess.check_output(cmd.split(" "))
-        except OSError as e:
+        except OSError:
             logging.error("Error while trying to disassemble: objdump not found in $PATH")
             sys.exit(1)
 
@@ -95,8 +96,10 @@ def prepare_jumpbuf(buf):
     dst = mmap(0, PAGE_CEIL(len(buf)), PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
     src = ctypes.create_string_buffer(buf)
     logging.debug("Memmove(0x%.8x, 0x%.8x, 0x%.8x)" % (dst, ctypes.addressof(src), len(buf)))
-    ret = memmove(dst, src, len(buf))
+    memmove(dst, src, len(buf))
     ret = mprotect(PAGE_FLOOR(dst), PAGE_CEIL(len(buf)), PROT_READ | PROT_EXEC)
+    if ret == 0:
+        logging.error("Calling mprotect() on jumpbuffer failed")
 
     return ctypes.cast(dst, ctypes.CFUNCTYPE(c_void_p))
 
@@ -213,7 +216,7 @@ class ELFParser:
 
             # store extracted program header data
             data = ctypes.create_string_buffer(buf)
-            pentry = {"flags":p_flags, "memsz":p_memsz, "vaddr":p_vaddr, "filesz":p_filesz, "offset":p_offset, "data":data}
+            pentry = {"flags": p_flags, "memsz": p_memsz, "vaddr": p_vaddr, "filesz": p_filesz, "offset": p_offset, "data": data}
             self.ph_entries.append(pentry)
 
         elif p_type == PT_INTERP:
@@ -230,7 +233,7 @@ class ELFParser:
         sz = 0
         for entry in self.ph_entries:
             vaddr, memsz = entry["vaddr"], entry["memsz"]
-            sz = vaddr + memsz if (vaddr + memsz) > sz else sz 
+            sz = vaddr + memsz if (vaddr + memsz) > sz else sz
         if not self.is_pie:
             assert(len(self.ph_entries) > 0)
             adjust = self.ph_entries[0]["vaddr"]
@@ -282,7 +285,7 @@ class Stack:
             enc = arg.encode("utf-8", errors="ignore")
             buf = ctypes.create_string_buffer(enc)
             self.add_ref(buf)
-            stack[i] = ctypes.addressof(buf) 
+            stack[i] = ctypes.addressof(buf)
             i = i + 1
         stack[i + 1] = c_size_t(0)
         env_off = i + 1
@@ -322,7 +325,7 @@ AT_EGID:              1000
         # add AT_CLKTCK, AT_HWCAP, AT_HWCAP2 (since glibc 2.18) only if they're non-zero
         # copy AT_PLATFORM as well (which is a string f.e. x86_64)
         # set up AT_EXECFN properly (points to string f.e. /usr/bin/sleep)
-        # set up AT_UID, AT_EUID, AT_GID, AT_EGID 
+        # set up AT_UID, AT_EUID, AT_GID, AT_EGID
 
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
@@ -352,14 +355,13 @@ AT_EGID:              1000
 
         return off + 21
 
-    def setup_debug(self, env_off, aux_off, end, show_stack = False):
+    def setup_debug(self, env_off, aux_off, end, show_stack=False):
         # stack is shown if user explicitly asks for it or if we are in
         # debugging mode
         if not show_stack:
             return
         log = logging.info
         stack = self.stack
-        ret = []
         log("stack contents:")
         log(" argv")
         for i in range(0, end):
@@ -369,9 +371,9 @@ AT_EGID:              1000
                 if i == aux_off:
                     log(" auxv")
                 if (i - aux_off) % 2 == 1:
-                    log("  %.8x:   0x%.16x 0x%.16x" % ((i-1)*8, stack[i-1], stack[i]))
+                    log("  %.8x:   0x%.16x 0x%.16x" % ((i - 1) * 8, stack[i - 1], stack[i]))
             else:
-                log("  %.8x:   0x%.16x" % (i*8, stack[i]))
+                log("  %.8x:   0x%.16x" % (i * 8, stack[i]))
 
 
 class CodeGenerator:
@@ -425,12 +427,12 @@ class CodeGenerator:
 
     def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
         """
-	49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
-	43 42 41
-	4d 01 de                add    %r11,%r14
-	49 bf 11 11 11 11 11    movabs $0x1111111111111111,%r15
-	11 11 11
-	4d 89 37                mov    %r14,(%r15)
+        49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
+        43 42 41
+        4d 01 de                add    %r11,%r14
+        49 bf 11 11 11 11 11    movabs $0x1111111111111111,%r15
+        11 11 11
+        4d 89 37                mov    %r14,(%r15)
         """
         # write at location within auxv the value %r11 + map_offset
         auxv_ptr = stack.base + stack.auxv_start + auxv_offset
@@ -480,8 +482,8 @@ class CodeGenerator:
             prot |= (PROT_WRITE if (flags & PF_W) != 0 else 0)
             prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
-            #code = self.mprotect(dst, PAGE_CEIL(memsz), prot)
-            #ret.append(code)
+            # code = self.mprotect(dst, PAGE_CEIL(memsz), prot)
+            # ret.append(code)
 
         return b"".join(ret)
 
@@ -502,9 +504,11 @@ class CodeGenerator:
             buf += struct.pack("<L", jump_delay)
             buf += b"\x54\x5f\x6a\x23\x58\x0f\x05"
 
-        buf += b"\x48\xbc%s\x48\xb9%s\x4c\x01\xd9\x48\x31\xd2\xff\xe1" % \
-                (struct.pack("<Q", stack_ptr),
-                 struct.pack("<Q", entry_ptr))
+        # XXX todo reset all registers to 0 just to be sure
+
+        buf += b"\x48\xbc%s\x48\xb9%s\x4c\x01\xd9\x48\x31\xd2\xff\xe1" % (
+            struct.pack("<Q", stack_ptr),
+            struct.pack("<Q", entry_ptr))
         self.log("Jumpbuf with entry %%r11+0x%x and stack: 0x%.16x" % (entry_ptr, stack_ptr))
         return buf
 
@@ -521,7 +525,6 @@ class CodeGenerator:
         )
         self.log("Generated memcpy call (dst=%%r11 + 0x%.8x, src=0x%.8x, size=0x%.8x)" % (off, src, sz))
         return buf
-
 
     def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
         """
@@ -540,12 +543,12 @@ class CodeGenerator:
         """
         # we store the mmap() result in %r11
         buf = b"\x48\xc7\xc0\x09\x00\x00\x00\x48\xbf%s\x48\xbe%s\x48\xc7\xc2%s\x49\xc7\xc2%s\x49\xc7\xc0%s\x49\xc7\xc1%s\x0f\x05\x50\x4c\x8b\x1c\x24" % (
-                    struct.pack("<Q", addr),
-                    struct.pack("<Q", length),
-                    struct.pack("<L", prot),
-                    struct.pack("<L", flags),
-                    struct.pack("<L", fd),
-                    struct.pack("<L", offset)
+            struct.pack("<Q", addr),
+            struct.pack("<Q", length),
+            struct.pack("<L", prot),
+            struct.pack("<L", flags),
+            struct.pack("<L", fd),
+            struct.pack("<L", offset)
         )
         self.log("Generated mmap call (addr=0x%.8x, length=0x%.8x, prot=0x%x, flags=0x%x)" % (addr, length, prot, flags))
         return buf
@@ -562,9 +565,9 @@ class CodeGenerator:
         48 31 c0                xor %rax, %rax
         """
         buf = b"\x48\xc7\xc0\x0a\x00\x00\x00\x48\xbf%s\x48\xbe%s\x48\xc7\xc2%s\x0f\x05" % (
-                    struct.pack("<Q", addr),
-                    struct.pack("<Q", length),
-                    struct.pack("<L", prot),
+            struct.pack("<Q", addr),
+            struct.pack("<Q", length),
+            struct.pack("<L", prot),
         )
         return buf
 
@@ -578,8 +581,8 @@ class CodeGenerator:
         0f 05                   syscall
         """
         buf = b"\x48\xc7\xc0\x0b\x00\x00\x00\x48\xbf%s\x48\xbe%s\x0f\x05" % (
-                    struct.pack("<Q", addr),
-                    struct.pack("<Q", length)
+            struct.pack("<Q", addr),
+            struct.pack("<Q", length)
         )
         return buf
 
@@ -599,8 +602,8 @@ class ELFExecutor:
             self.interp = None
             return
 
-        self.log("Dynamic executable so loading interpreter from %s" % 
-                self.exe.interp.decode("utf-8", errors="ignore"))
+        self.log("Dynamic executable so loading interpreter from %s" %
+                 self.exe.interp.decode("utf-8", errors="ignore"))
         with open(self.exe.interp, "rb") as fd:
             try:
                 interp = ELFParser(fd)
@@ -638,6 +641,7 @@ class ELFExecutor:
         cfunction = prepare_jumpbuf(jumpbuf)
         cfunction()
 
+
 def main():
     parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary, any arguments to it and then sit back and pray.",
                                      usage="%(prog)s [options] <binary> [arguments]")
@@ -668,6 +672,7 @@ def main():
 
     executor = ELFExecutor(binary)
     executor.execute(args, ns.show_jumpbuf, ns.show_stack, ns.jump_delay)
+
 
 if __name__ == "__main__":
     main()

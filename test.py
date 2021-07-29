@@ -7,14 +7,16 @@ from ctypes.util import find_library
 
 import ulexecve as u
 
+
 class TestLibcBackwardsCompat(unittest.TestCase):
+
     def test_getauxval(self):
         libc = ctypes.CDLL(find_library('c'))
 
         try:
             getauxval = libc.getauxval
             self._run(getauxval)
-        except AttributeError as i:
+        except AttributeError:
             pass
 
     def test_emulate_getauxval(self):
@@ -33,6 +35,7 @@ class TestLibcBackwardsCompat(unittest.TestCase):
         self.assertNotEqual(fn(6), 0)  # AT_PAGESZ
         self.assertNotEqual(fn(7), 0)  # AT_BASE
         self.assertEqual(fn(11), os.getuid())   # AT_UID
+
 
 class TestUtils(unittest.TestCase):
     def test_pagesize(self):
@@ -53,24 +56,26 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(u.PAGE_CEIL(pgsize), pgsize)
         self.assertEqual(u.PAGE_CEIL(pgsize + 5), pgsize * 2)
 
+
 class TestFlags(unittest.TestCase):
     def test_flags(self):
         # just here for accidential modification in main source
         flags = {
-                "PROT_READ" : 0x01,
-                "PROT_WRITE" : 0x02,
-                "PROT_EXEC" : 0X04,
-                "MAP_PRIVATE" : 0x02,
-                "MAP_ANONYMOUS" : 0x20,
-                "MAP_GROWSDOWN" : 0x0100,
-                "MAP_FIXED" : 0x10,
-                "PT_LOAD" : 0x1,
-                "PT_INTERP" : 0x3,
-                "EM_X86_64" : 0x3e
+            "PROT_READ": 0x01,
+            "PROT_WRITE": 0x02,
+            "PROT_EXEC": 0X04,
+            "MAP_PRIVATE": 0x02,
+            "MAP_ANONYMOUS": 0x20,
+            "MAP_GROWSDOWN": 0x0100,
+            "MAP_FIXED": 0x10,
+            "PT_LOAD": 0x1,
+            "PT_INTERP": 0x3,
+            "EM_X86_64": 0x3e
         }
         for x in flags:
             self.assertIn(x, dir(u))
             self.assertEqual(flags[x], getattr(u, x))
+
 
 if __name__ == "__main__":
     unittest.main()
