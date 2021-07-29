@@ -256,12 +256,12 @@ class Stack:
             stack[i] = ctypes.addressof(buf) 
             i = i + 1
         stack[i + 1] = c_size_t(0)
-        env_off = i+1
+        env_off = i + 1
 
         # envp does not have a preceding count and is ultimately NULL terminated
         i = 0
         for env in envp:
-            enc = arg.encode("utf-8", errors="ignore")
+            enc = env.encode("utf-8", errors="ignore")
             buf = ctypes.create_string_buffer(enc)
             self.add_ref(buf)
             stack[i + env_off] = ctypes.addressof(buf)
@@ -562,7 +562,7 @@ class ELFExecutor:
 
     def execute(self, args, show_jumpbuf=False, show_stack=False, jump_delay=None):
         # construct a stack with 2k pages, pass argv, envp and build it up
-        stack = Stack(2048)
+        self.stack = stack = Stack(2048)
         argv = [self.binary] + args
         envp = []
         for name in os.environ:
