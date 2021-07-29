@@ -27,6 +27,9 @@ def PAGE_CEIL(addr):
     return (PAGE_FLOOR((addr) + PAGE_SIZE - 1))
 
 
+# TODO: if we run on glibc older than 2.16 we would not have getauxval(), we
+# could then try to emulate it by reading from /proc/<pid>/auxv. That glibc is
+# from late 2012 though so do we want to support old glibc as well?
 getauxval = libc.getauxval
 getauxval.argtypes = [c_ulong]
 getauxval.restype = c_ulong
@@ -284,6 +287,7 @@ class Stack:
 
     def setup_auxv(self, off, exe):
         auxv_ptr = self.base + off
+
         at_sysinfo_ehdr = getauxval(Stack.AT_SYSINFO_EHDR)
         logging.debug("Auxv entry AT_SYSINFO_EHDR (vDSO) set to: 0x%.8x" % (at_sysinfo_ehdr))
 
