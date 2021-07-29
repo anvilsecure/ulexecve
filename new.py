@@ -236,7 +236,7 @@ class Stack:
         logging.debug("Stack allocated at: 0x%.8x" % (self.base))
         self.refs = []
 
-        self.auxv_offset = 0
+        self.auxv_start = 0
 
     def add_ref(self, obj):
         # we simply add the object to the list so that the garbage collector
@@ -270,7 +270,7 @@ class Stack:
         i = i + 1
 
         aux_off = i + env_off
-        self.auxv_offset = aux_off
+        self.auxv_start = aux_off << 3
 
         end_off = self.setup_auxv(aux_off, exe, interp)
 
@@ -350,12 +350,19 @@ class CodeGenerator:
         ret = []
         code = self.generate_elf_loader(self.exe)
         ret.append(code)
+
         # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack.base + (stack.auxv_offset << 3), self.exe.e_phoff)
+        code = self.generate_auxv_fixup(stack, (3 << 3), self.exe.e_phoff)
+        ret.append(code)
+
+        # fix up the auxv vector with the proper relative addresses too
+        code = self.generate_auxv_fixup(stack, (5 << 3), self.exe.e_entry)
         ret.append(code)
 
         if self.interp:
             code = self.generate_elf_loader(self.interp)
+            ret.append(code)
+            code = self.generate_auxv_fixup(stack, (1 << 3), 0)
             ret.append(code)
             entry_point = self.interp.e_entry
         else:
@@ -374,7 +381,7 @@ class CodeGenerator:
 
         return b"".join(ret)
 
-    def generate_auxv_fixup(self, auxv_ptr, offset):
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset):
         """
 	49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
 	43 42 41
@@ -383,9 +390,11 @@ class CodeGenerator:
 	11 11 11
 	4d 89 37                mov    %r14,(%r15)
         """
+        # write at location within auxv the value %r11 + map_offset
+        auxv_ptr = stack.base + stack.auxv_start + auxv_offset
         return b"\x49\xbe%s\x4d\x01\xde\x49\xbf%s\x4d\x89\x37" % (
-		struct.pack("<Q", offset),
-		struct.pack("<Q", auxv_ptr + (3 << 3)))
+		struct.pack("<Q", map_offset),
+		struct.pack("<Q", auxv_ptr))
 
     def generate_elf_loader(self, elf):
         PF_R = 0x4
