@@ -1,5 +1,4 @@
 import setuptools
-import re
 
 # load long description directly from the include markdown README
 with open("README.md", "r") as fd:
@@ -14,9 +13,8 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/anvilventures/ulexecve",
-    packages=setuptools.find_packages(where="src"),
-    package_dir={"": "."},
-    keywords="",
+    py_modules=["ulexecve"],
+    keywords="userland execve",
     classifiers=[
         "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 3",
