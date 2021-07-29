@@ -1,0 +1,3 @@
+include *.py
+include README.md
+include NOTES
