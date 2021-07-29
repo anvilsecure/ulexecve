@@ -27,12 +27,29 @@ def PAGE_CEIL(addr):
     return (PAGE_FLOOR((addr) + PAGE_SIZE - 1))
 
 
-# TODO: if we run on glibc older than 2.16 we would not have getauxval(), we
-# could then try to emulate it by reading from /proc/<pid>/auxv. That glibc is
-# from late 2012 though so do we want to support old glibc as well?
-getauxval = libc.getauxval
-getauxval.argtypes = [c_ulong]
-getauxval.restype = c_ulong
+def _emulate_getauxval(ltype):
+    with open("/proc/self/auxv", "rb") as fd:
+        data = fd.read()
+
+        # NOTE: would have to change if ported to 32-bit
+        isize = 8
+        data = [data[x: x + (isize << 1)] for x in range(0, len(data), (isize << 1))]
+        for d in data:
+            key, val = struct.unpack("<QQ", d)
+            if key == ltype:
+                return val
+    return 0x0
+
+# If we run on glibc older than 2.16 we would not have getauxval(), we could
+# then try to emulate it by reading from /proc/<pid>/auxv. That glibc version
+# was released in late 2012 though but let's try and support older or different
+# libcs anyway.
+try:
+    getauxval = libc.getauxval
+    getauxval.argtypes = [c_ulong]
+    getauxval.restype = c_ulong
+except AttributeError:
+    getauxval = _emulate_getauxval
 
 mmap = libc.mmap
 mmap.argtypes = [c_void_p, c_size_t, c_int, c_int, c_int, c_size_t]
@@ -52,8 +69,6 @@ MAP_FIXED = 0x10
 
 PT_LOAD = 0x1
 PT_INTERP = 0x3
-ET_EXEC = 0x2
-ET_DYN = 0x3
 EM_X86_64 = 0x3e
 
 
@@ -89,6 +104,9 @@ class ELFParsingError(Exception):
 
 
 class ELFParser:
+
+    ET_EXEC = 0x2
+    ET_DYN = 0x3
 
     def __init__(self, stream):
         self.stream = stream
@@ -140,7 +158,7 @@ class ELFParser:
             self.e_phnum, self.e_shentsize, self.e_shnum, self.e_shstrndx = values
         self.ehdr = buf
 
-        if self.e_type != ET_EXEC and self.e_type != ET_DYN:
+        if self.e_type != ELFParser.ET_EXEC and self.e_type != ELFParser.ET_DYN:
             raise ELFParsingError("ELF is not an executable or shared object file")
 
         if self.e_phnum == 0:
