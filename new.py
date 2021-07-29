@@ -292,6 +292,17 @@ class Stack:
         logging.debug("Auxv entry AT_SYSINFO_EHDR (vDSO) set to: 0x%.8x" % (at_sysinfo_ehdr))
 
         stack = self.stack
+        """
+AT_UID:               1000
+AT_EUID:              1000
+AT_GID:               1000
+AT_EGID:              1000
+"""
+        # TODO:
+        # add AT_CLKTCK, AT_HWCAP, AT_HWCAP2 (since glibc 2.18) only if they're non-zero
+        # copy AT_PLATFORM as well (which is a string f.e. x86_64)
+        # set up AT_EXECFN properly (points to string f.e. /usr/bin/sleep)
+        # set up AT_UID, AT_EUID, AT_GID, AT_EGID 
 
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
