@@ -285,7 +285,12 @@ class Stack:
     AT_EXECFN = 31
     AT_SYSINFO = 32
     AT_SYSINFO_EHDR = 33
-    AT_MINSIGSTKSZ = 51  # stack needed for signal deliv3ry (AArch64)
+    AT_MINSIGSTKSZ = 51  # stack needed for signal delivery (AArch64)
+
+    # Offsets so that we can fixup the auxv header values later on from the jumpcode
+    OFFSET_AT_BASE = (1 << 3)
+    OFFSET_AT_PHDR = (3 << 3)
+    OFFSET_AT_ENTRY = (5 << 3)
 
     def __init__(self, num_pages):
         self.size = 2048 * PAGE_SIZE
@@ -362,7 +367,9 @@ class Stack:
         # at this point in time we don't know yet where everything will be
         # loaded in memory. Please note that they should remain at their
         # current positions in the auxv vector or else the offsets used when
-        # fixing up auxv in the jumpcode need to be changed as well.
+        # fixing up auxv in the jumpcode need to be changed as well. The
+        # offsets are defined in OFFSET_AT_BASE, OFFSET_AT_PHDR and
+        # OFFSET_AT_ENTRY respectively.
         #
         # We could use collections.OrderedDirect() but that means we would only
         # be able to support Python 2.7. This is also meant to be able to be
@@ -460,17 +467,17 @@ class CodeGenerator:
         ret.append(code)
 
         # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack, (3 << 3), self.exe.e_phoff)
+        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_PHDR, self.exe.e_phoff)
         ret.append(code)
 
         # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack, (5 << 3), self.exe.e_entry, self.exe.is_pie)
+        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_ENTRY, self.exe.e_entry, self.exe.is_pie)
         ret.append(code)
 
         if self.interp:
             code = self.generate_elf_loader(self.interp)
             ret.append(code)
-            code = self.generate_auxv_fixup(stack, (1 << 3), 0)
+            code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_BASE, 0)
             ret.append(code)
             entry_point = self.interp.e_entry
         else:
