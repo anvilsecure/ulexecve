@@ -43,6 +43,25 @@ def _emulate_getauxval(ltype):
     return 0x0
 
 
+# Need to use this wrapper as there are no good backwards compatible options
+# that yield a seekable byte stream for both major Python versions
+def _readbytes_from_stdin():
+    if sys.version_info.major == 2:
+        import StringIO
+        sio = StringIO.StringIO()
+        sio.write(sys.stdin.read())
+        sio.seek(0)
+        return sio
+    elif sys.version_info.major == 3:
+        import io
+        bio = io.BytesIO()
+        bio.write(sys.stdin.buffer.read())
+        bio.seek(0)
+        return bio
+    else:
+        raise Exception("unexpected Python version found")
+
+
 # If we run on glibc older than 2.16 we would not have getauxval(), we could
 # then try to emulate it by reading from /proc/<pid>/auxv. That glibc version
 # was released in late 2012 though but let's try and support older or different
@@ -632,15 +651,15 @@ class CodeGenerator:
 
 
 class ELFExecutor:
-    def __init__(self, binary):
-        with open(binary, "rb") as fd:
-            try:
-                exe = ELFParser(fd)
-            except ELFParsingError as e:
-                logging.error("Error while parsing binary: %s" % e)
-                raise e
+    def __init__(self, binstream, binname):
+        binstream.seek(0)
+        try:
+            exe = ELFParser(binstream)
+        except ELFParsingError as e:
+            logging.error("Error while parsing binary: %s" % e)
+            raise e
 
-        self.binary = binary
+        self.binname = binname
         self.exe = exe
         if not self.exe.interp:
             self.interp = None
@@ -664,7 +683,7 @@ class ELFExecutor:
     def execute(self, args, show_jumpbuf=False, show_stack=False, jump_delay=None):
         # construct a stack with 2k pages, pass argv, envp and build it up
         self.stack = stack = Stack(2048)
-        argv = [self.binary] + args
+        argv = [self.binname] + args
         envp = []
         for name in os.environ:
             envp.append("%s=%s" % (name, os.environ[name]))
@@ -714,7 +733,15 @@ def main():
     binary = ns.command[0]
     args = ns.command[1:]
 
-    executor = ELFExecutor(binary)
+    if binary == "-":
+        binfd = _readbytes_from_stdin()
+        binary = "<stdin>"
+    else:
+        binfd = open(binary, "rb")
+
+    executor = ELFExecutor(binfd, binary)
+    binfd.close()
+
     executor.execute(args, ns.show_jumpbuf, ns.show_stack, ns.jump_delay)
 
 
