@@ -2,6 +2,8 @@
 
 import ctypes
 import os
+import random
+import string
 import subprocess
 import tempfile
 import unittest
@@ -93,16 +95,40 @@ class TestBinaries(unittest.TestCase):
         output = subprocess.check_output(cmd, shell=True)
         self.assertNotEqual(output.find(os.path.basename(py_fn).encode("utf-8")), -1)
 
-    def compile_and_run(self, data, suffix, cmd):
+    def compile_and_run(self, data, suffix, cmd, extra=""):
         with tempfile.NamedTemporaryFile(suffix="", mode="wb") as out:
             with tempfile.NamedTemporaryFile(suffix=suffix, mode="wb") as inp:
                 inp.write(data)
                 inp.seek(0)
                 cmd = cmd % (out.name, inp.name)
                 output = subprocess.check_output(cmd, shell=True)
-            cmd = "python %s %s" % (u.__file__, out.name)
+            cmd = "python %s %s %s" % (u.__file__, out.name, extra)
             output = subprocess.check_output(cmd, shell=True)
             return output
+
+    def test_args(self):
+        c = b"#include <stdio.h>\nint main(int argc, char ** argv){printf(\"%i\\n%s\\n%s\\n\", argc, argv[1], argv[2]);}\n"
+        try:
+            output = self.compile_and_run(c, ".c", "gcc -o %s %s", "hello world")
+        except subprocess.CalledProcessError:
+            self.skipTest("gcc does not seem to be installed so not running gcc specific tests")
+            return
+        lines = output.splitlines()
+        self.assertEqual(lines[0], b"3")
+        self.assertEqual(lines[1], b"hello")
+        self.assertEqual(lines[2], b"world")
+
+    def test_envp(self):
+        envval = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(10)).encode("utf-8")
+        envname = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(10)).encode("utf-8")
+        c = b"#include <stdio.h>\n#include <stdlib.h>\nint main(){printf(\"%%s\\n\", getenv(\"%s\"));}\n" % envname
+        try:
+            os.putenv(envname, envval)
+            output = self.compile_and_run(c, ".c", "gcc -o %s %s", "")
+        except subprocess.CalledProcessError:
+            self.skipTest("gcc does not seem to be installed so not running gcc specific tests")
+            return
+        self.assertEqual(envval + b"\n", output)
 
     def test_gcc_dynamic_bin(self):
         c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc\\n\");}"
@@ -114,7 +140,7 @@ class TestBinaries(unittest.TestCase):
         self.assertEqual(b"hello world from gcc\n", output)
 
     def test_gcc_static_bin(self):
-        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc static\\n\");}"
+        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc static\\n\");}\n"
         try:
             output = self.compile_and_run(c, ".c", "gcc --static -o %s %s")
         except subprocess.CalledProcessError:
@@ -123,7 +149,7 @@ class TestBinaries(unittest.TestCase):
         self.assertEqual(b"hello world from gcc static\n", output)
 
     def test_gcc_pie_bin(self):
-        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc pie\\n\");}"
+        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc pie\\n\");}\n"
         try:
             output = self.compile_and_run(c, ".c", "gcc -O0 -pie -fpie -o %s %s")
         except subprocess.CalledProcessError:
@@ -132,7 +158,7 @@ class TestBinaries(unittest.TestCase):
         self.assertEqual(b"hello world from gcc pie\n", output)
 
     def test_gcc_nopie_bin(self):
-        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc no-pie\\n\");}"
+        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc no-pie\\n\");}\n"
         try:
             output = self.compile_and_run(c, ".c", "gcc -O0 -no-pie -fno-pie -o %s %s")
         except subprocess.CalledProcessError:
