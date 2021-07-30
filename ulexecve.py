@@ -117,6 +117,7 @@ MAP_FIXED = 0x10
 PT_LOAD = 0x1
 PT_INTERP = 0x3
 EM_X86_64 = 0x3e
+EM_386 = 0x3
 
 
 def display_jumpbuf(buf):
@@ -172,6 +173,23 @@ class ELFParser:
         buf = self.stream.read(sz)
         return (struct.unpack("%c%s" % ("<" if self.is_little_endian else ">", fmt), buf), buf)
 
+    def unpack_ehdr(self):
+        fmt = "HHIIIIIHHHHHH" if self.is_32bit else "HHIQQQIHHHHHH"
+        return self.unpack(fmt)
+
+    def unpack_phdr(self):
+        # Unpack as the order of the values is different for 32-bit or 64-bit
+        # program headers so we can return the values in a consistent order
+        if self.is_32bit:
+            fmt = "IIIIIIII"
+            values, buf = self.unpack(fmt)
+            p_type, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align = values
+        else:
+            fmt = "IIQQQQQQ"
+            values, buf = self.unpack(fmt)
+            p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align = values
+        return ((p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align), buf)
+
     def parse(self):
         self.parse_head()
         self.parse_ehdr()
@@ -184,10 +202,10 @@ class ELFParser:
             raise ELFParsingError("Not an ELF file")
 
         bittype = self.stream.read(1)
-        if bittype == b"\x01":
-            raise ELFParsingError("Not implemented 32-bit ELF parsing")
-        elif bittype != b"\x02":
+        if bittype not in (b"\x01", b"\x02"):
             raise ELFParsingError("Unknown EI class specified")
+
+        self.is_32bit = True if bittype == b"\x01" else False
 
         b = self.stream.read(1)
         if b == b"\x01":
@@ -201,7 +219,7 @@ class ELFParser:
 
     def parse_ehdr(self):
         self.stream.seek(16)
-        values, buf = self.unpack("HHIQQQIHHHHHH")
+        values, buf = self.unpack_ehdr()
         self.e_type, self.e_machine, self.e_version, self.e_entry, \
             self.e_phoff, self.e_shoff, self.e_flags, self.e_ehsize, self.e_phentsize, \
             self.e_phnum, self.e_shentsize, self.e_shnum, self.e_shstrndx = values
@@ -213,7 +231,7 @@ class ELFParser:
         if self.e_phnum == 0:
             raise ELFParsingError("No program headers found in ELF")
 
-        if self.e_machine != EM_X86_64:
+        if self.e_machine not in (EM_X86_64, EM_386):
             raise ELFParsingError("ELF machine type is not x86-64")
 
     def parse_pentries(self):
@@ -222,7 +240,7 @@ class ELFParser:
             self.parse_pentry()
 
     def parse_pentry(self):
-        values, _ = self.unpack("IIQQQQQQ")
+        values, _ = self.unpack_phdr()
         p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, \
             p_align = values
 
