@@ -257,10 +257,16 @@ class Stack:
     AT_EUID = 12
     AT_GID = 13
     AT_EGID = 14
+    AT_PLATFORM = 15
+    AT_HWCAP = 16
+    AT_CLKTCK = 17
     AT_SECURE = 23
     AT_RANDOM = 25
+    AT_HWCAP2 = 26
+    AT_EXECFN = 31
     AT_SYSINFO = 32
     AT_SYSINFO_EHDR = 33
+    AT_MINSIGSTKSZ = 51  # stack needed for signal deliv3ry (AArch64)
 
     def __init__(self, num_pages):
         self.size = 2048 * PAGE_SIZE
@@ -317,41 +323,53 @@ class Stack:
         auxv_ptr = self.base + off
 
         at_sysinfo_ehdr = getauxval(Stack.AT_SYSINFO_EHDR)
-        logging.debug("Auxv entry AT_SYSINFO_EHDR (vDSO) set to: 0x%.8x" % (at_sysinfo_ehdr))
+        logging.debug("vDSO loaded at 0x%.8x (Auxv entry AT_SYSINFO_EHDR)" % (at_sysinfo_ehdr))
 
-        stack = self.stack
+        at_clktck = getauxval(Stack.AT_CLKTCK)
+        at_hwcap = getauxval(Stack.AT_HWCAP)
+        at_hwcap2 = getauxval(Stack.AT_HWCAP2)
+        logging.debug("Auxv entries: HWCAP=0x%.8x, HWCAP2=0x%.8x, AT_CLKTCK=0x%.8x" %
+                      (at_hwcap, at_hwcap2, at_clktck))
 
-        # TODO:
-        # add AT_CLKTCK, AT_HWCAP, AT_HWCAP2 (since glibc 2.18) only if they're non-zero
         # copy AT_PLATFORM as well (which is a string f.e. x86_64)
         # set up AT_EXECFN properly (points to string f.e. /usr/bin/sleep)
-        # set up AT_UID, AT_EUID, AT_GID, AT_EGID
 
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
-        # loaded in memory
+        # loaded in memory. Please note that they should remain at their current
+        # positions in the auxv vector or else the offsets used when fixing up
+        # auxv in the jumpcode need to be changed as well.
 
-        auxv = []
-        auxv.append((Stack.AT_BASE, 0x0))
-        auxv.append((Stack.AT_PHDR, 0x0))
-        auxv.append((Stack.AT_ENTRY, 0x0))
-        auxv.append((Stack.AT_PHNUM, exe.e_phnum))
-        auxv.append((Stack.AT_PHENT, exe.e_phentsize))
-        auxv.append((Stack.AT_PAGESZ, PAGE_SIZE))
-        auxv.append((Stack.AT_SECURE, 0))
-        auxv.append((Stack.AT_RANDOM, auxv_ptr))  # XXX now just points to start of auxv
-        auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
-        auxv.append((Stack.AT_SYSINFO_EHDR, at_sysinfo_ehdr))
-        auxv.append((Stack.AT_UID, os.getuid()))
-        auxv.append((Stack.AT_EUID, os.geteuid()))
-        auxv.append((Stack.AT_GID, os.getgid()))
-        auxv.append((Stack.AT_EGID, os.getegid()))
+        auxv = {}
+        auxv[Stack.AT_BASE] = 0x0
+        auxv[Stack.AT_PHDR] = 0x0
+        auxv[Stack.AT_ENTRY] = 0x0
+        auxv[Stack.AT_PHNUM] = exe.e_phnum
+        auxv[Stack.AT_PHENT] = exe.e_phentsize
+        auxv[Stack.AT_PAGESZ] = PAGE_SIZE
+        auxv[Stack.AT_SECURE] = 0
+        auxv[Stack.AT_RANDOM] = auxv_ptr  # XXX now just points to start of auxv
+        auxv[Stack.AT_SYSINFO] = 0  # should not be present or simply zero on x86-64
+        auxv[Stack.AT_SYSINFO_EHDR] = at_sysinfo_ehdr
+        auxv[Stack.AT_UID] = os.getuid()
+        auxv[Stack.AT_EUID] = os.geteuid()
+        auxv[Stack.AT_GID] = os.getgid()
+        auxv[Stack.AT_EGID] = os.getegid()
 
-        auxv.append((Stack.AT_NULL, 0))
+        if at_clktck != 0:
+            auxv[Stack.AT_CLKTCK] = at_clktck
+        if at_hwcap != 0:
+            auxv[Stack.AT_HWCAP] = at_hwcap
+        if at_hwcap2 != 0:
+            auxv[Stack.AT_HWCAP2] = at_hwcap2
 
-        for at_type, at_val in auxv:
+        # always end with this
+        auxv[Stack.AT_NULL] = 0
+
+        stack = self.stack
+        for at_type in auxv:
             stack[off] = at_type
-            stack[off + 1] = at_val
+            stack[off + 1] = auxv[at_type]
             off = off + 2
         off = off - 1
         return off
@@ -365,6 +383,12 @@ class Stack:
         stack = self.stack
         log("stack contents:")
         log(" argv")
+
+        # create dict with AT_ flags for nicer display of auxv entries below
+        at_names = {}
+        for name in [x for x in dir(Stack) if x.startswith("AT_")]:
+            at_names[getattr(Stack, name)] = name
+
         for i in range(0, end):
             if i == env_off:
                 log(" envp")
@@ -372,7 +396,9 @@ class Stack:
                 if i == aux_off:
                     log(" auxv")
                 if (i - aux_off) % 2 == 1:
-                    log("  %.8x:   0x%.16x 0x%.16x" % ((i - 1) * 8, stack[i - 1], stack[i]))
+                    val = stack[i - 1]
+                    name = at_names[val]
+                    log("  %.8x:   0x%.16x 0x%.16x (%s)" % ((i - 1) * 8, val, stack[i], name))
             else:
                 log("  %.8x:   0x%.16x" % (i * 8, stack[i]))
 
