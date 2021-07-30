@@ -109,7 +109,7 @@ class TestOptions(unittest.TestCase):
         output = subprocess.check_output(cmd, shell=True)
         self.assertEqual(b"delayed\n", output)
         t1 = int(math.floor(time.time()))
-        self.assertEqual(t1 - t0, delay)
+        self.assertGreaterEqual(t1 - t0, delay)
 
 
 class TestBinaries(unittest.TestCase):
