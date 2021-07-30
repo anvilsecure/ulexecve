@@ -288,6 +288,7 @@ class Stack:
         self.refs.append(obj)
 
     def setup(self, argv, envp, exe, show_stack=False):
+        assert(len(self.refs) == 0)
         stack = self.stack
         # argv starts with amount of args and is ultimately NULL terminated
         stack[0] = c_size_t(len(argv))
@@ -331,45 +332,58 @@ class Stack:
         logging.debug("Auxv entries: HWCAP=0x%.8x, HWCAP2=0x%.8x, AT_CLKTCK=0x%.8x" %
                       (at_hwcap, at_hwcap2, at_clktck))
 
-        # copy AT_PLATFORM as well (which is a string f.e. x86_64)
-        # set up AT_EXECFN properly (points to string f.e. /usr/bin/sleep)
+        platform_str = ctypes.create_string_buffer(b"x86_64")
+        self.add_ref(platform_str)
+        at_platform = ctypes.addressof(platform_str)
+
+        # the first reference is argv[0] which is the pathname used to execute the binary
+        at_execfn = ctypes.addressof(self.refs[0])
 
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
-        # loaded in memory. Please note that they should remain at their current
-        # positions in the auxv vector or else the offsets used when fixing up
-        # auxv in the jumpcode need to be changed as well.
-
-        auxv = {}
-        auxv[Stack.AT_BASE] = 0x0
-        auxv[Stack.AT_PHDR] = 0x0
-        auxv[Stack.AT_ENTRY] = 0x0
-        auxv[Stack.AT_PHNUM] = exe.e_phnum
-        auxv[Stack.AT_PHENT] = exe.e_phentsize
-        auxv[Stack.AT_PAGESZ] = PAGE_SIZE
-        auxv[Stack.AT_SECURE] = 0
-        auxv[Stack.AT_RANDOM] = auxv_ptr  # XXX now just points to start of auxv
-        auxv[Stack.AT_SYSINFO] = 0  # should not be present or simply zero on x86-64
-        auxv[Stack.AT_SYSINFO_EHDR] = at_sysinfo_ehdr
-        auxv[Stack.AT_UID] = os.getuid()
-        auxv[Stack.AT_EUID] = os.geteuid()
-        auxv[Stack.AT_GID] = os.getgid()
-        auxv[Stack.AT_EGID] = os.getegid()
+        # loaded in memory. Please note that they should remain at their
+        # current positions in the auxv vector or else the offsets used when
+        # fixing up auxv in the jumpcode need to be changed as well.
+        #
+        # We could use collections.OrderedDirect() but that means we would only
+        # be able to support Python 2.7. This is also meant to be able to be
+        # used on older very out-of-date CPython installations so we just use a
+        # list with 2-tuples so we remain ordered. Ordering also needs to be
+        # preserved as it seems some versions of ld seem to expect that lest we
+        # get a failed assertion `GL(dl_rtld_map).l_libname' failed from the
+        # linker when using Python 2.7.
+        auxv = []
+        auxv.append((Stack.AT_BASE, 0x0))
+        auxv.append((Stack.AT_PHDR, 0x0))
+        auxv.append((Stack.AT_ENTRY, 0x0))
+        auxv.append((Stack.AT_PHNUM, exe.e_phnum))
+        auxv.append((Stack.AT_PHENT, exe.e_phentsize))
+        auxv.append((Stack.AT_PAGESZ, PAGE_SIZE))
+        auxv.append((Stack.AT_SECURE, 0))
+        auxv.append((Stack.AT_RANDOM, auxv_ptr))  # XXX now just points to start of auxv
+        auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
+        auxv.append((Stack.AT_SYSINFO_EHDR, at_sysinfo_ehdr))
+        auxv.append((Stack.AT_PLATFORM, at_platform))
+        auxv.append((Stack.AT_EXECFN, at_execfn))
+        auxv.append((Stack.AT_UID, os.getuid()))
+        auxv.append((Stack.AT_EUID, os.geteuid()))
+        auxv.append((Stack.AT_GID, os.getgid()))
+        auxv.append((Stack.AT_EGID, os.getegid()))
 
         if at_clktck != 0:
-            auxv[Stack.AT_CLKTCK] = at_clktck
+            auxv.append((Stack.AT_CLKTCK, at_clktck))
         if at_hwcap != 0:
-            auxv[Stack.AT_HWCAP] = at_hwcap
+            auxv.append((Stack.AT_HWCAP, at_hwcap))
         if at_hwcap2 != 0:
-            auxv[Stack.AT_HWCAP2] = at_hwcap2
+            auxv.append((Stack.AT_HWCAP2, at_hwcap2))
 
         # always end with this
-        auxv[Stack.AT_NULL] = 0
+        auxv.append((Stack.AT_NULL, 0))
 
         stack = self.stack
-        for at_type in auxv:
+        for at_type, at_val in auxv:
             stack[off] = at_type
-            stack[off + 1] = auxv[at_type]
+            stack[off + 1] = at_val
             off = off + 2
         off = off - 1
         return off
