@@ -742,13 +742,18 @@ def main():
                                      usage="%(prog)s [options] <binary> [arguments]")
 
     parser.add_argument("--debug", action="store_true", help="output info useful for debugging a crashing binary")
+    parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
     parser.add_argument("--show-stack", action="store_true", help="show stack contents")
-    parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
+    parser.add_argument("--version", action="store_true", help="show version")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="<binary> [arguments] (eg. /bin/ls /tmp)")
     ns = parser.parse_args(sys.argv[1:])
 
     logging.basicConfig(format="%(message)s", level=logging.DEBUG if ns.debug else logging.INFO)
+
+    if ns.version:
+        print("%s v%s" % (os.path.basename(__file__).split(".")[0], __version__))
+        sys.exit(1)
 
     if len(ns.command) == 0:
         parser.print_help()
