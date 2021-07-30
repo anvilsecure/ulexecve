@@ -126,6 +126,7 @@ def display_jumpbuf(buf):
         tmp.seek(0)
         logging.debug("Written jumpbuf to %s" % tmp.name)
         # To disassemble run the following command with temp filename  appended to it
+        # XXX would have to change below if we're 32-bit mode
         cmd = "objdump -m i386:x86-64 -b binary -D %s" % tmp.name
         logging.debug("Executing: %s" % cmd)
         try:
@@ -331,6 +332,7 @@ class Stack:
     AT_MINSIGSTKSZ = 51  # stack needed for signal delivery (AArch64)
 
     # Offsets so that we can fixup the auxv header values later on from the jumpcode
+    # XXX: these offsets need to be adjusted when we are a 32-bit or a 64-bit stack
     OFFSET_AT_BASE = (1 << 3)
     OFFSET_AT_PHDR = (3 << 3)
     OFFSET_AT_ENTRY = (5 << 3)
