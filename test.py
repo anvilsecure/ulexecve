@@ -93,40 +93,70 @@ class TestBinaries(unittest.TestCase):
         output = subprocess.check_output(cmd, shell=True)
         self.assertNotEqual(output.find(os.path.basename(py_fn).encode("utf-8")), -1)
 
-    def test_gcc_bins(self):
-        pass
+    def compile_and_run(self, data, suffix, cmd):
+        with tempfile.NamedTemporaryFile(suffix="", mode="wb") as out:
+            with tempfile.NamedTemporaryFile(suffix=suffix, mode="wb") as inp:
+                inp.write(data)
+                inp.seek(0)
+                cmd = cmd % (out.name, inp.name)
+                output = subprocess.check_output(cmd, shell=True)
+            cmd = "python %s %s" % (u.__file__, out.name)
+            output = subprocess.check_output(cmd, shell=True)
+            return output
+
+    def test_gcc_dynamic_bin(self):
+        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc\\n\");}"
+        try:
+            output = self.compile_and_run(c, ".c", "gcc -o %s %s")
+        except subprocess.CalledProcessError:
+            self.skipTest("gcc does not seem to be installed so not running gcc specific tests")
+            return
+        self.assertEqual(b"hello world from gcc\n", output)
+
+    def test_gcc_static_bin(self):
+        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc static\\n\");}"
+        try:
+            output = self.compile_and_run(c, ".c", "gcc --static -o %s %s")
+        except subprocess.CalledProcessError:
+            self.skipTest("gcc does not seem to be installed so not running gcc specific tests")
+            return
+        self.assertEqual(b"hello world from gcc static\n", output)
+
+    def test_gcc_pie_bin(self):
+        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc pie\\n\");}"
+        try:
+            output = self.compile_and_run(c, ".c", "gcc -O0 -pie -fpie -o %s %s")
+        except subprocess.CalledProcessError:
+            self.skipTest("gcc does not seem to be installed so not running gcc specific tests")
+            return
+        self.assertEqual(b"hello world from gcc pie\n", output)
+
+    def test_gcc_nopie_bin(self):
+        c = b"#include <stdio.h>\nint main(){printf(\"hello world from gcc no-pie\\n\");}"
+        try:
+            output = self.compile_and_run(c, ".c", "gcc -O0 -no-pie -fno-pie -o %s %s")
+        except subprocess.CalledProcessError:
+            self.skipTest("gcc does not seem to be installed so not running gcc specific tests")
+            return
+        self.assertEqual(b"hello world from gcc no-pie\n", output)
 
     def test_rust_bins(self):
-        py_fn = u.__file__
-        with tempfile.NamedTemporaryFile(suffix="", mode="wb") as out:
-            with tempfile.NamedTemporaryFile(suffix=".rs", mode="wb") as inp:
-                try:
-                    inp.write(b"fn main(){println!(\"hello world from rust\");}\n")
-                    inp.seek(0)
-                    cmd = "rustc -o %s %s" % (out.name, inp.name)
-                    output = subprocess.check_output(cmd, shell=True)
-                except subprocess.CalledProcessError:
-                    self.skipTest("rust does not seem to be installed so not running rust specific test")
-                    return
-            cmd = "python %s %s" % (py_fn, out.name)
-            output = subprocess.check_output(cmd, shell=True)
-            self.assertEqual(b"hello world from rust\n", output)
+        try:
+            c = b"fn main(){println!(\"hello world from rust\");}\n"
+            output = self.compile_and_run(c, ".rs", "rustc -o %s %s")
+        except subprocess.CalledProcessError:
+            self.skipTest("rust does not seem to be installed so not running rust specific test")
+            return
+        self.assertEqual(b"hello world from rust\n", output)
 
     def test_golang_bins(self):
-        py_fn = u.__file__
-        with tempfile.NamedTemporaryFile(suffix="", mode="wb") as out:
-            with tempfile.NamedTemporaryFile(suffix=".go", mode="wb") as inp:
-                try:
-                    inp.write(b"package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"hello world from golang\")}\n")
-                    inp.seek(0)
-                    cmd = "go build -o %s %s" % (out.name, inp.name)
-                    output = subprocess.check_output(cmd, shell=True)
-                except subprocess.CalledProcessError:
-                    self.skipTest("golang does not seem to be installed to not running golang specific test")
-                    return
-            cmd = "python %s %s" % (py_fn, out.name)
-            output = subprocess.check_output(cmd, shell=True)
-            self.assertEqual(b"hello world from golang\n", output)
+        try:
+            c = b"package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"hello world from golang\")}\n"
+            output = self.compile_and_run(c, ".go", "go build -o %s %s")
+        except subprocess.CalledProcessError:
+            self.skipTest("golang does not seem to be installed to not running golang specific test")
+            return
+        self.assertEqual(b"hello world from golang\n", output)
 
 
 if __name__ == "__main__":
