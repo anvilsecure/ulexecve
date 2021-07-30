@@ -6,12 +6,15 @@ import os
 import random
 import string
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from ctypes.util import find_library
 
 import ulexecve as u
+
+python_bin = "python3" if sys.version_info.major == 3 else "python2"
 
 
 class TestLibcBackwardsCompat(unittest.TestCase):
@@ -86,23 +89,23 @@ class TestFlags(unittest.TestCase):
 class TestOptions(unittest.TestCase):
     def test_jumpdelay(self):
         delay = 0
-        cmd = "echo wutwut | python %s --jump-delay %i /bin/cat" % (u.__file__, delay)
+        cmd = "echo wutwut | %s %s --jump-delay %i /bin/cat" % (python_bin, u.__file__, delay)
         output = subprocess.check_output(cmd, shell=True)
         self.assertEqual(b"wutwut\n", output)
 
         with self.assertRaises(subprocess.CalledProcessError):
             delay = -1
-            cmd = "python %s --jump-delay %i /bin/ls 2>&1 >> /dev/null" % (u.__file__, delay)
+            cmd = "%s %s --jump-delay %i /bin/ls 2>&1 >> /dev/null" % (python_bin, u.__file__, delay)
             output = subprocess.check_output(cmd, shell=True)
 
         with self.assertRaises(subprocess.CalledProcessError):
             delay = 500
-            cmd = "python %s --jump-delay %i /bin/ls 2>&1 >> /dev/null" % (u.__file__, delay)
+            cmd = "%s %s --jump-delay %i /bin/ls 2>&1 >> /dev/null" % (python_bin, u.__file__, delay)
             output = subprocess.check_output(cmd, shell=True)
 
         t0 = int(math.floor(time.time()))
         delay = 2
-        cmd = "echo delayed | python %s --jump-delay %i /bin/cat" % (u.__file__, delay)
+        cmd = "echo delayed | %s %s --jump-delay %i /bin/cat" % (python_bin, u.__file__, delay)
         output = subprocess.check_output(cmd, shell=True)
         self.assertEqual(b"delayed\n", output)
         t1 = int(math.floor(time.time()))
@@ -114,12 +117,12 @@ class TestBinaries(unittest.TestCase):
         # run /bin/cat and /bin/ls and see if those work fine
         py_fn = u.__file__
         cat_fn = "/bin/cat"
-        cmd = "echo hello | python %s %s" % (py_fn, cat_fn)
+        cmd = "echo hello | %s %s %s" % (python_bin, py_fn, cat_fn)
         output = subprocess.check_output(cmd, shell=True)
         self.assertEqual(b"hello\n", output)
 
         cat_fn = "/bin/ls -lha"
-        cmd = "python %s %s %s" % (py_fn, cat_fn, os.path.basename(py_fn))
+        cmd = "%s %s %s %s" % (python_bin, py_fn, cat_fn, os.path.basename(py_fn))
         output = subprocess.check_output(cmd, shell=True)
         self.assertNotEqual(output.find(os.path.basename(py_fn).encode("utf-8")), -1)
 
@@ -130,7 +133,7 @@ class TestBinaries(unittest.TestCase):
                 inp.seek(0)
                 cmd = cmd % (out.name, inp.name)
                 output = subprocess.check_output(cmd, shell=True)
-            cmd = "python %s %s %s" % (u.__file__, out.name, extra)
+            cmd = "%s %s %s %s" % (python_bin, u.__file__, out.name, extra)
             output = subprocess.check_output(cmd, shell=True)
             return output
 
