@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 
 import ctypes
+import math
 import os
 import random
 import string
 import subprocess
 import tempfile
+import time
 import unittest
 from ctypes.util import find_library
 
@@ -79,6 +81,32 @@ class TestFlags(unittest.TestCase):
         for x in flags:
             self.assertIn(x, dir(u))
             self.assertEqual(flags[x], getattr(u, x))
+
+
+class TestOptions(unittest.TestCase):
+    def test_jumpdelay(self):
+        delay = 0
+        cmd = "echo wutwut | python %s --jump-delay %i /bin/cat" % (u.__file__, delay)
+        output = subprocess.check_output(cmd, shell=True)
+        self.assertEqual(b"wutwut\n", output)
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            delay = -1
+            cmd = "python %s --jump-delay %i /bin/ls 2>&1 >> /dev/null" % (u.__file__, delay)
+            output = subprocess.check_output(cmd, shell=True)
+
+        with self.assertRaises(subprocess.CalledProcessError):
+            delay = 500
+            cmd = "python %s --jump-delay %i /bin/ls 2>&1 >> /dev/null" % (u.__file__, delay)
+            output = subprocess.check_output(cmd, shell=True)
+
+        t0 = int(math.floor(time.time()))
+        delay = 2
+        cmd = "echo delayed | python %s --jump-delay %i /bin/cat" % (u.__file__, delay)
+        output = subprocess.check_output(cmd, shell=True)
+        self.assertEqual(b"delayed\n", output)
+        t1 = int(math.floor(time.time()))
+        self.assertEqual(t1 - t0, delay)
 
 
 class TestBinaries(unittest.TestCase):

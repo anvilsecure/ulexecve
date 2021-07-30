@@ -515,29 +515,32 @@ class CodeGenerator:
         return b"".join(ret)
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
-        buf = b""
+        buf = []
         if jump_delay:
             """
-            48 31 f6                xor    %rsi,%rsi
-            56                      push   %rsi
-            68 55 a0 fc 01          pushq  $0x1fca055
-            54                      push   %rsp
-            5f                      pop    %rdi
-            6a 23                   pushq  $0x23
-            58                      pop    %rax
+            6a 00                   pushq  $0x0
+            68 c8 01 00 00          pushq  $0x1c8
+            48 89 e7                mov    %rsp,%rdi
+            48 c7 c0 23 00 00 00    mov    $0x23,%rax
+            41 53                   push %r11
             0f 05                   syscall
+            41 5b                   pop %r11
             """
-            buf += b"\x48\x31\xf6\x56\x68"
-            buf += struct.pack("<L", jump_delay)
-            buf += b"\x54\x5f\x6a\x23\x58\x0f\x05"
+            jd = struct.pack("<L", jump_delay)
+            buf.append(b"\x6a\x00\x68%s\x48\x89\xe7\x48\xc7\xc0\x23\x00\x00\x00" % jd)
+            buf.append(b"\x41\x53\x0f\x05\x41\x5b")
 
-        # XXX todo reset all registers to 0 just to be sure
+        # reset main registers (%rax, %rbx, %rcx, %rdx, %rbp, %rsp, %rsi, %rdi) just to be sure
+        main_regs = [b"\xc0", b"\xdb", b"\xc9", b"\xd2", b"\xed", b"\xe4", b"\xf6", b"\xff"]
+        for reg in main_regs:
+            buf.append(b"\x48\x31%s" % reg)
 
-        buf += b"\x48\xbc%s\x48\xb9%s\x4c\x01\xd9\x48\x31\xd2\xff\xe1" % (
+        buf.append(b"\x48\xbc%s\x48\xb9%s\x4c\x01\xd9\x48\x31\xd2\xff\xe1" % (
             struct.pack("<Q", stack_ptr),
             struct.pack("<Q", entry_ptr))
+        )
         self.log("Jumpbuf with entry %%r11+0x%x and stack: 0x%.16x" % (entry_ptr, stack_ptr))
-        return buf
+        return b"".join(buf)
 
     def memcpy_from_offset(self, off, src, sz):
         """
