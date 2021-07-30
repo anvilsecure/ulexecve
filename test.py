@@ -119,8 +119,8 @@ class TestBinaries(unittest.TestCase):
         self.assertEqual(lines[2], b"world")
 
     def test_envp(self):
-        envval = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(10)).encode("utf-8")
-        envname = "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(10)).encode("utf-8")
+        envval = "".join(random.choice(string.ascii_uppercase) for _ in range(10)).encode("utf-8")
+        envname = "".join(random.choice(string.ascii_uppercase) for _ in range(10)).encode("utf-8")
         c = b"#include <stdio.h>\n#include <stdlib.h>\nint main(){printf(\"%%s\\n\", getenv(\"%s\"));}\n" % envname
         try:
             os.putenv(envname, envval)
