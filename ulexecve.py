@@ -245,6 +245,7 @@ class ELFParser:
 
 class Stack:
 
+    # Taken from /usr/include/x86_64-linux-gnu/bits/auxv.h
     AT_NULL = 0
     AT_PHDR = 3
     AT_PHENT = 4
@@ -252,6 +253,10 @@ class Stack:
     AT_PAGESZ = 6
     AT_BASE = 7
     AT_ENTRY = 9
+    AT_UID = 11
+    AT_EUID = 12
+    AT_GID = 13
+    AT_EGID = 14
     AT_SECURE = 23
     AT_RANDOM = 25
     AT_SYSINFO = 32
@@ -315,12 +320,7 @@ class Stack:
         logging.debug("Auxv entry AT_SYSINFO_EHDR (vDSO) set to: 0x%.8x" % (at_sysinfo_ehdr))
 
         stack = self.stack
-        """
-AT_UID:               1000
-AT_EUID:              1000
-AT_GID:               1000
-AT_EGID:              1000
-"""
+
         # TODO:
         # add AT_CLKTCK, AT_HWCAP, AT_HWCAP2 (since glibc 2.18) only if they're non-zero
         # copy AT_PLATFORM as well (which is a string f.e. x86_64)
@@ -330,30 +330,31 @@ AT_EGID:              1000
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
         # loaded in memory
-        stack[off] = Stack.AT_BASE
-        stack[off + 1] = 0x0
-        stack[off + 2] = Stack.AT_PHDR
-        stack[off + 3] = 0x0
-        stack[off + 4] = Stack.AT_ENTRY
-        stack[off + 5] = 0x0
-        stack[off + 6] = Stack.AT_PHNUM
-        stack[off + 7] = exe.e_phnum
-        stack[off + 8] = Stack.AT_PHENT
-        stack[off + 9] = exe.e_phentsize
-        stack[off + 10] = Stack.AT_PAGESZ
-        stack[off + 11] = PAGE_SIZE
-        stack[off + 12] = Stack.AT_SECURE
-        stack[off + 13] = 0
-        stack[off + 14] = Stack.AT_RANDOM
-        stack[off + 15] = auxv_ptr  # (should be set to start of auxv for stack cookies)
-        stack[off + 16] = Stack.AT_SYSINFO  # should be not present or simply zero on x86-64
-        stack[off + 17] = 0
-        stack[off + 18] = Stack.AT_SYSINFO_EHDR
-        stack[off + 19] = at_sysinfo_ehdr
-        stack[off + 20] = Stack.AT_NULL
-        stack[off + 21] = 0
 
-        return off + 21
+        auxv = []
+        auxv.append((Stack.AT_BASE, 0x0))
+        auxv.append((Stack.AT_PHDR, 0x0))
+        auxv.append((Stack.AT_ENTRY, 0x0))
+        auxv.append((Stack.AT_PHNUM, exe.e_phnum))
+        auxv.append((Stack.AT_PHENT, exe.e_phentsize))
+        auxv.append((Stack.AT_PAGESZ, PAGE_SIZE))
+        auxv.append((Stack.AT_SECURE, 0))
+        auxv.append((Stack.AT_RANDOM, auxv_ptr))  # XXX now just points to start of auxv
+        auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
+        auxv.append((Stack.AT_SYSINFO_EHDR, at_sysinfo_ehdr))
+        auxv.append((Stack.AT_UID, os.getuid()))
+        auxv.append((Stack.AT_EUID, os.geteuid()))
+        auxv.append((Stack.AT_GID, os.getgid()))
+        auxv.append((Stack.AT_EGID, os.getegid()))
+
+        auxv.append((Stack.AT_NULL, 0))
+
+        for at_type, at_val in auxv:
+            stack[off] = at_type
+            stack[off + 1] = at_val
+            off = off + 2
+        off = off - 1
+        return off
 
     def setup_debug(self, env_off, aux_off, end, show_stack=False):
         # stack is shown if user explicitly asks for it or if we are in
