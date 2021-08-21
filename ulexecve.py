@@ -341,7 +341,7 @@ class Stack:
     OFFSET_AT_PHDR = 3
     OFFSET_AT_ENTRY = 5
 
-    def __init__(self, num_pages):
+    def __init__(self, num_pages, is_32bit=False):
         self.size = 2048 * PAGE_SIZE
         self.base = mmap(0, self.size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_GROWSDOWN, -1, 0)
         ctypes.memset(self.base, 0, self.size)
@@ -353,6 +353,7 @@ class Stack:
         self.refs = []
 
         self.auxv_start = 0
+        self.is_32bit = is_32bit
 
     def add_ref(self, obj):
         # we simply add the object to the list so that the garbage collector
@@ -487,9 +488,15 @@ class Stack:
                 if (i - aux_off) % 2 == 1:
                     val = stack[i - 1]
                     name = at_names[val]
-                    log("  %.8x:   0x%.16x 0x%.16x (%s)" % ((i - 1) * 8, val, stack[i], name))
+                    if self.is_32bit:
+                        log("  %.8x:   0x%.8x 0x%.8x (%s)" % ((i - 1) * 4, val, stack[i], name))
+                    else:
+                        log("  %.8x:   0x%.16x 0x%.16x (%s)" % ((i - 1) * 8, val, stack[i], name))
             else:
-                log("  %.8x:   0x%.16x" % (i * 8, stack[i]))
+                if self.is_32bit:
+                    log("  %.8x:   0x%.8x" % (i * 4, stack[i]))
+                else:
+                    log("  %.8x:   0x%.16x" % (i * 8, stack[i]))
 
 
 class CodeGenerator:
@@ -623,15 +630,18 @@ class CodeGenX86(CodeGenerator):
 
     def munmap(self, addr, length):
         """
-        b8 5b 00 00 00       	mov    $0xb,%eax
-        ba 66 66 00 00       	mov    $0x6666,%edx
-        be 42 42 00 00       	mov    $0x4242,%esi
+        b8 0b 00 00 00       	mov    $0xb,%eax
+	bb 66 66 00 00       	mov    $0x6666,%ebx
+        51                   	push   %ecx
+        b9 42 42 00 00       	mov    $0x4242,%ecx
         cd 80                	int    $0x80
+        59                      pop    %ecx
         """
-        buf = b"\xb8\x5b\x00\x00\x00\xba%s\xbe%s\xcd\x80" % (
+        buf = b"\xb8\x5b\x00\x00\x00\xbb%s\x51\xb9%s\xcd\x80\x59" % (
             struct.pack("<L", addr),
             struct.pack("<L", length)
         )
+        buf += b"\x90"*10
         return buf
 
     def memcpy_from_offset(self, off, src, sz):
@@ -882,7 +892,7 @@ class ELFExecutor:
 
     def execute(self, args, show_jumpbuf=False, show_stack=False, jump_delay=None):
         # construct a stack with 2k pages, pass argv, envp and build it up
-        self.stack = stack = Stack(2048)
+        self.stack = stack = Stack(2048, self.exe.is_32bit)
         argv = [self.binname] + args
         envp = []
         for name in os.environ:
