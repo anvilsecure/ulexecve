@@ -592,6 +592,9 @@ class CodeGenerator:
 
         return b"".join(ret)
 
+    def mprotect(self, addr, length, prot):
+        raise NotImplementedError
+
     def munmap(self, addr, length):
         raise NotImplementedError
 
@@ -611,6 +614,9 @@ class CodeGenX86(CodeGenerator):
         if interp:
             assert(interp.e_machine == EM_386)
         CodeGenerator.__init__(self, exe, interp)
+
+    def mprotect(self, addr, length, prot):
+        raise NotImplementedError
 
     def munmap(self, addr, length):
         return "\x90"
