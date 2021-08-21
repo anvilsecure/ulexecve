@@ -335,10 +335,11 @@ class Stack:
     AT_MINSIGSTKSZ = 51  # stack needed for signal delivery (AArch64)
 
     # Offsets so that we can fixup the auxv header values later on from the jumpcode
-    # XXX: these offsets need to be adjusted when we are a 32-bit or a 64-bit stack
-    OFFSET_AT_BASE = (1 << 3)
-    OFFSET_AT_PHDR = (3 << 3)
-    OFFSET_AT_ENTRY = (5 << 3)
+    # The users of these offset need to multiple them by the size of c_size_t for the
+    # platform they're used
+    OFFSET_AT_BASE = 1
+    OFFSET_AT_PHDR = 3
+    OFFSET_AT_ENTRY = 5
 
     def __init__(self, num_pages):
         self.size = 2048 * PAGE_SIZE
@@ -684,7 +685,7 @@ class CodeGenX86(CodeGenerator):
         89 03                	mov    %eax,(%ebx)
         """
         # write at location within auxv the value %ecx + map_offset
-        auxv_ptr = stack.base + stack.auxv_start + auxv_offset
+        auxv_ptr = stack.base + stack.auxv_start + (auxv_offset << 2)
         ret = []
         ret.append(b"\xb8%s" % struct.pack("<L", map_offset))
         if relative:
@@ -735,7 +736,7 @@ class CodeGenX86_64(CodeGenerator):
         4d 89 37                mov    %r14,(%r15)
         """
         # write at location within auxv the value %r11 + map_offset
-        auxv_ptr = stack.base + stack.auxv_start + auxv_offset
+        auxv_ptr = stack.base + stack.auxv_start + (auxv_offset << 3)
         ret = []
         ret.append(b"\x49\xbe%s" % struct.pack("<Q", map_offset))
         if relative:
