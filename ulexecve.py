@@ -849,6 +849,8 @@ class CodeGenX86_64(CodeGenerator):
 
 class ELFExecutor:
     def __init__(self, binstream, binname):
+        # XXX check if ELF machine type is same as calling code
+        # else we will fail due to ctypes size mismatch anyway
         binstream.seek(0)
         try:
             exe = ELFParser(binstream)
