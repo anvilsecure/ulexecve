@@ -549,6 +549,8 @@ class CodeGenerator:
             prot |= (PROT_WRITE if (flags & PF_W) != 0 else 0)
             prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
+            # TODO: implement mprotect() call to properly setup protection
+            # flags againfor memory segments
             # code = self.mprotect(dst, PAGE_CEIL(memsz), prot)
             # ret.append(code)
 
@@ -585,7 +587,7 @@ class CodeGenerator:
             if not self.exe.is_pie:
                 entry_point -= self.exe.ph_entries[0]["vaddr"]
 
-        self.log("Generating jumpcode with entry_point=0x%.16x and stack=0x%.16x" % (entry_point, stack.base))
+        self.log("Generating jumpcode with entry_point=0x%.8x and stack=0x%.8x" % (entry_point, stack.base))
 
         code = self.generate_jumpcode(stack.base, entry_point, jump_delay)
         ret.append(code)
@@ -619,23 +621,66 @@ class CodeGenX86(CodeGenerator):
         raise NotImplementedError
 
     def munmap(self, addr, length):
-        return "\x90"
+        """
+        b8 5b 00 00 00       	mov    $0xb,%eax
+        ba 66 66 00 00       	mov    $0x6666,%edx
+        be 42 42 00 00       	mov    $0x4242,%esi
+        cd 80                	int    $0x80
+        """
+        buf = b"\xb8\x5b\x00\x00\x00\xba%s\xbe%s\xcd\x80" % (
+            struct.pack("<L", addr),
+            struct.pack("<L", length)
+        )
+        return buf
 
     def memcpy_from_offset(self, off, src, sz):
-        return "\x90"
-        return ""
+        """
+        be 41 41 41 41       	mov    $0x41414141,%esi
+        bf 42 42 42 42       	mov    $0x42424242,%edi
+        01 cf                	add    %ecx,%edi
+        51                   	push   %ecx
+        b9 00 01 00 00       	mov    $0x100,%ecx
+        f3 a4                	rep movsb %ds:(%esi),%es:(%edi)
+        59                   	pop    %ecx
+        """
+        buf = b"\xbe%s\xbf%s\x01\xcf\x51\xb9%s\xf3\xa4\x59" % (
+                struct.pack("<L", src),
+                struct.pack("<L", off),
+                struct.pack("<L", sz),
+        )
+        self.log("Generated memcpy call (dst=%%ecs + 0x%.8x, src=0x%.8x, size=0x%.8x)" % (off, src, sz))
+        return buf
 
     def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
-        return "\x90"
-        return ""
+        """
+        b8 5a 00 00 00       	mov    $0x5a,%eax
+        68 00 10 00 00          push $0x1000
+        89 e3                	mov    %esp,%ebx
+        cd 80                	int    $0x80
+ 	89 c1                	mov    %eax,%ecx
+        """
+
+        # push eax + save return value to where exactly? what register
+        # can we use?
+
+        # for x86 we need to push all arguments on the stack as mmap() gets
+        # more arguments than there are registers
+        insts = [b"\xb8\x5a\x00\x00\x00"]
+
+        # reverse order the structure onto the stack
+        args = (offset, fd, flags, prot, length, addr)
+        for arg in args:
+            insts.append(b"\x68%s" % struct.pack("<L", arg))
+
+        insts.append(b"\x89\xe3\xcd\x80\x89\xc1")
+        self.log("Generated mmap call (addr=0x%.8x, length=0x%.8x, prot=0x%x, flags=0x%x)" % (addr, length, prot, flags))
+        return b"".join(insts)
 
     def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
         return "\x90"
-        return ""
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
         return "\x90"
-        return ""
 
 
 class CodeGenX86_64(CodeGenerator):
@@ -698,6 +743,7 @@ class CodeGenX86_64(CodeGenerator):
         43 42 41
         4c 01 df                add    %r11,%rdi
         """
+        # TODO fix up the comment above
         buf = b"\x48\xbe%s\x48\xbf%s\x4c\x01\xdf\x48\xb9%s\xf3\xa4" % (
             struct.pack("<Q", src),
             struct.pack("<Q", off),
