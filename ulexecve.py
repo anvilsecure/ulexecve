@@ -120,14 +120,17 @@ EM_X86_64 = 0x3e
 EM_386 = 0x3
 
 
-def display_jumpbuf(buf):
+def display_jumpbuf(machine, buf):
+
+    machines = {EM_386: "i386", EM_X86_64: "i386:x86-64"}
+    assert(machine in machines)
+
     with tempfile.NamedTemporaryFile(suffix=".jumpbuf.bin", mode="wb") as tmp:
         tmp.write(buf)
         tmp.seek(0)
-        logging.debug("Written jumpbuf to %s" % tmp.name)
-        # To disassemble run the following command with temp filename  appended to it
-        # XXX would have to change below if we're 32-bit mode
-        cmd = "objdump -m i386:x86-64 -b binary -D %s" % tmp.name
+        logging.debug("Written jumpbuf to %s (#%u bytes)" % (tmp.name, len(buf)))
+        # To disassemble run the following command with temp filename appended to it
+        cmd = "objdump -m %s -b binary -D %s" % (machines[machine], tmp.name)
         logging.debug("Executing: %s" % cmd)
         try:
             output = subprocess.check_output(cmd.split(" "))
@@ -490,70 +493,22 @@ class Stack:
 
 class CodeGenerator:
     def __init__(self, exe, interp=None):
-        assert(exe.e_machine == EM_X86_64)
-        if interp:
-            assert(interp.e_machine == EM_X86_64)
+        assert(exe.e_machine == interp.e_machine)
         self.exe = exe
         self.interp = interp
 
+    @staticmethod
+    def get_code_generator(exe, interp=None):
+        machines = {EM_386: CodeGenX86, EM_X86_64: CodeGenX86_64}
+        keys = machines.keys()
+        assert(exe.e_machine in keys)
+        if interp:
+            assert(interp.e_machine in keys)
+        assert(exe.e_machine == interp.e_machine)
+        return machines[exe.e_machine](exe, interp)
+
     def log(self, logline):
         logging.debug("%s" % (logline))
-
-    def generate(self, stack, jump_delay=None):
-        # generate jump buffer with the CPU instructions which copy all
-        # segments to the right locations in memory, set the correct protection
-        # flags on those memory segments and then prepare for the actual jump
-        # into hail mary land.
-
-        # generate ELF loading code for the executable as well as the
-        # interpreter if necessary
-        ret = []
-        code = self.generate_elf_loader(self.exe)
-        ret.append(code)
-
-        # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_PHDR, self.exe.e_phoff)
-        ret.append(code)
-
-        # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_ENTRY, self.exe.e_entry, self.exe.is_pie)
-        ret.append(code)
-
-        if self.interp:
-            code = self.generate_elf_loader(self.interp)
-            ret.append(code)
-            code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_BASE, 0)
-            ret.append(code)
-            entry_point = self.interp.e_entry
-        else:
-            entry_point = self.exe.e_entry
-            if not self.exe.is_pie:
-                entry_point -= self.exe.ph_entries[0]["vaddr"]
-
-        self.log("Generating jumpcode with entry_point=0x%.16x and stack=0x%.16x" % (entry_point, stack.base))
-
-        code = self.generate_jumpcode(stack.base, entry_point, jump_delay)
-        ret.append(code)
-
-        return b"".join(ret)
-
-    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
-        """
-        49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
-        43 42 41
-        4d 01 de                add    %r11,%r14
-        49 bf 11 11 11 11 11    movabs $0x1111111111111111,%r15
-        11 11 11
-        4d 89 37                mov    %r14,(%r15)
-        """
-        # write at location within auxv the value %r11 + map_offset
-        auxv_ptr = stack.base + stack.auxv_start + auxv_offset
-        ret = []
-        ret.append(b"\x49\xbe%s" % struct.pack("<Q", map_offset))
-        if relative:
-            ret.append(b"\x4d\x01\xde")
-        ret.append(b"\x49\xbf%s\x4d\x89\x37" % (struct.pack("<Q", auxv_ptr)))
-        return b"".join(ret)
 
     def generate_elf_loader(self, elf):
         PF_R = 0x4
@@ -597,6 +552,110 @@ class CodeGenerator:
             # code = self.mprotect(dst, PAGE_CEIL(memsz), prot)
             # ret.append(code)
 
+        return b"".join(ret)
+
+    def generate(self, stack, jump_delay=None):
+        # generate jump buffer with the CPU instructions which copy all
+        # segments to the right locations in memory, set the correct protection
+        # flags on those memory segments and then prepare for the actual jump
+        # into hail mary land.
+
+        # generate ELF loading code for the executable as well as the
+        # interpreter if necessary
+        ret = []
+        code = self.generate_elf_loader(self.exe)
+        ret.append(code)
+
+        # fix up the auxv vector with the proper relative addresses too
+        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_PHDR, self.exe.e_phoff)
+        ret.append(code)
+
+        # fix up the auxv vector with the proper relative addresses too
+        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_ENTRY, self.exe.e_entry, self.exe.is_pie)
+        ret.append(code)
+
+        if self.interp:
+            code = self.generate_elf_loader(self.interp)
+            ret.append(code)
+            code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_BASE, 0)
+            ret.append(code)
+            entry_point = self.interp.e_entry
+        else:
+            entry_point = self.exe.e_entry
+            if not self.exe.is_pie:
+                entry_point -= self.exe.ph_entries[0]["vaddr"]
+
+        self.log("Generating jumpcode with entry_point=0x%.16x and stack=0x%.16x" % (entry_point, stack.base))
+
+        code = self.generate_jumpcode(stack.base, entry_point, jump_delay)
+        ret.append(code)
+
+        return b"".join(ret)
+
+    def munmap(self, addr, length):
+        raise NotImplementedError
+
+    def memcpy_from_offset(self, off, src, sz):
+        raise NotImplementedError
+
+    def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
+        raise NotImplementedError
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        raise NotImplementedError
+
+
+class CodeGenX86(CodeGenerator):
+    def __init__(self, exe, interp=None):
+        assert(exe.e_machine == EM_386)
+        if interp:
+            assert(interp.e_machine == EM_386)
+        CodeGenerator.__init__(self, exe, interp)
+
+    def munmap(self, addr, length):
+        return "\x90"
+
+    def memcpy_from_offset(self, off, src, sz):
+        return "\x90"
+        return ""
+
+    def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
+        return "\x90"
+        return ""
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        return "\x90"
+        return ""
+
+    def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
+        return "\x90"
+        return ""
+
+
+class CodeGenX86_64(CodeGenerator):
+
+    def __init__(self, exe, interp=None):
+        assert(exe.e_machine == EM_X86_64)
+        if interp:
+            assert(interp.e_machine == EM_X86_64)
+        CodeGenerator.__init__(self, exe, interp)
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        """
+        49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
+        43 42 41
+        4d 01 de                add    %r11,%r14
+        49 bf 11 11 11 11 11    movabs $0x1111111111111111,%r15
+        11 11 11
+        4d 89 37                mov    %r14,(%r15)
+        """
+        # write at location within auxv the value %r11 + map_offset
+        auxv_ptr = stack.base + stack.auxv_start + auxv_offset
+        ret = []
+        ret.append(b"\x49\xbe%s" % struct.pack("<Q", map_offset))
+        if relative:
+            ret.append(b"\x4d\x01\xde")
+        ret.append(b"\x49\xbf%s\x4d\x89\x37" % (struct.pack("<Q", auxv_ptr)))
         return b"".join(ret)
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
@@ -742,11 +801,13 @@ class ELFExecutor:
         stack.setup(argv, envp, self.exe, show_stack=show_stack)
 
         # run the code generator to build up the jump buffer
-        cg = CodeGenerator(self.exe, self.interp)
+        cg = CodeGenerator.get_code_generator(self.exe, self.interp)
         jumpbuf = cg.generate(stack, jump_delay)
 
         if show_jumpbuf:
-            display_jumpbuf(jumpbuf)
+            # we just pass in the e_machine from the ELF executable so the display routine
+            # can properly set the arguments for the external call to objdump
+            display_jumpbuf(self.exe.e_machine, jumpbuf)
 
         # The full buffer of instructions was setup, now all we need to do is
         # map this to memory and set it such that that segment is executable so
