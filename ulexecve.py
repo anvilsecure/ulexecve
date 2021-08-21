@@ -677,10 +677,44 @@ class CodeGenX86(CodeGenerator):
         return b"".join(insts)
 
     def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
-        return "\x90"
+        """
+        b8 44 43 42 41       	mov    $0x41424344,%eax
+        01 c8                	add    %ecx,%eax
+        bb 54 53 52 51       	mov    $0x51525354,%ebx
+        89 03                	mov    %eax,(%ebx)
+        """
+        # write at location within auxv the value %ecx + map_offset
+        auxv_ptr = stack.base + stack.auxv_start + auxv_offset
+        ret = []
+        ret.append(b"\xb8%s" % struct.pack("<L", map_offset))
+        if relative:
+            ret.append(b"\x01\xc8")
+        ret.append(b"\xbb%s\x89\x03" % (struct.pack("<L", auxv_ptr)))
+        return b"".join(ret)
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
-        return "\x90"
+        buf = []
+        if jump_delay:
+            raise NotImplementedError("jump delay is not implemented yet for x86")
+
+        # reset main registers (%eax, %ebx, %edx, %ebp, %esp, %esi, %edi) just to be sure and we
+        # do not reset %ecx as that will contain the pointer to our entrypoint
+        main_regs = [b"\xc0", b"\xdb", b"\xd2", b"\xed", b"\xe4", b"\xf6", b"\xff"]
+        for reg in main_regs:
+            buf.append(b"\x31%s" % reg)
+
+        """
+        bc 44 43 42 41       	mov    $0x41424344,%esp
+        81 c1 34 12 00 00    	add    $0x1234,%ecx
+        ff e1                	jmp    *%ecx
+        """
+        buf.append(b"\xbc%s\x81\xc1%s\xff\xe1" % (
+            struct.pack("<L", stack_ptr),
+            struct.pack("<L", entry_ptr))
+        )
+
+        self.log("Jumpbuf with entry %%ecx+0x%x and stack: 0x%.8x" % (entry_ptr, stack_ptr))
+        return b"".join(buf)
 
 
 class CodeGenX86_64(CodeGenerator):
