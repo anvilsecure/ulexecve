@@ -501,7 +501,8 @@ class Stack:
 
 class CodeGenerator:
     def __init__(self, exe, interp=None):
-        assert(exe.e_machine == interp.e_machine)
+        if interp:
+            assert(exe.e_machine == interp.e_machine)
         self.exe = exe
         self.interp = interp
 
@@ -512,7 +513,7 @@ class CodeGenerator:
         assert(exe.e_machine in keys)
         if interp:
             assert(interp.e_machine in keys)
-        assert(exe.e_machine == interp.e_machine)
+            assert(exe.e_machine == interp.e_machine)
         return machines[exe.e_machine](exe, interp)
 
     def log(self, logline):
