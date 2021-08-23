@@ -707,7 +707,22 @@ class CodeGenX86(CodeGenerator):
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
         buf = []
         if jump_delay:
-            raise NotImplementedError("jump delay is not implemented yet for x86")
+            """
+            51                   	push   %ecx
+            6a 00                	push   $0x0
+            68 42 41 41 00       	push   $0x414142
+            89 e3                	mov    %esp,%ebx
+            b9 00 00 00 00       	mov    $0x0,%ecx
+            b8 a2 00 00 00       	mov    $0xa2,%eax
+            89 e3                	mov    %esp,%ebx
+            cd 80                	int    $0x80
+            59                   	pop    %ecx
+            59                   	pop    %ecx
+            59                   	pop    %ecx
+            """
+            jd = struct.pack("<L", jump_delay)
+            buf.append(b"\x51\x6a\x00\x68%s\x89\xe3\xb8\x00\x00\x00\x00" % jd)
+            buf.append(b"\xb8\xa2\x00\x00\x00\x89\xe3\xcd\x80\x59\x59\x59")
 
         # reset main registers (%eax, %ebx, %edx, %ebp, %esp, %esi, %edi) just to be sure and we
         # do not reset %ecx as that will contain the pointer to our entrypoint
