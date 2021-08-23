@@ -642,7 +642,6 @@ class CodeGenX86(CodeGenerator):
             struct.pack("<L", addr),
             struct.pack("<L", length)
         )
-        buf += b"\x90"*10
         return buf
 
     def memcpy_from_offset(self, off, src, sz):
