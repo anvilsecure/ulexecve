@@ -398,7 +398,8 @@ class Stack:
         auxv_ptr = self.base + off
 
         at_sysinfo_ehdr = getauxval(Stack.AT_SYSINFO_EHDR)
-        logging.debug("vDSO loaded at 0x%.8x (Auxv entry AT_SYSINFO_EHDR)" % (at_sysinfo_ehdr))
+        at_sysinfo = getauxval(Stack.AT_SYSINFO)
+        logging.debug("vDSO loaded at 0x%.8x (Auxv entry AT_SYSINFO_EHDR), AT_SYSINFO: 0x%.8x" % (at_sysinfo_ehdr, at_sysinfo))
 
         at_clktck = getauxval(Stack.AT_CLKTCK)
         at_hwcap = getauxval(Stack.AT_HWCAP)
@@ -412,6 +413,9 @@ class Stack:
 
         # the first reference is argv[0] which is the pathname used to execute the binary
         at_execfn = ctypes.addressof(self.refs[0])
+
+
+        #auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
 
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
@@ -437,7 +441,7 @@ class Stack:
         auxv.append((Stack.AT_PAGESZ, PAGE_SIZE))
         auxv.append((Stack.AT_SECURE, 0))
         auxv.append((Stack.AT_RANDOM, auxv_ptr))  # XXX now just points to start of auxv
-        auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
+        auxv.append((Stack.AT_SYSINFO, at_sysinfo))
         auxv.append((Stack.AT_SYSINFO_EHDR, at_sysinfo_ehdr))
         auxv.append((Stack.AT_PLATFORM, at_platform))
         auxv.append((Stack.AT_EXECFN, at_execfn))
