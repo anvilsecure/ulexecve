@@ -414,9 +414,6 @@ class Stack:
         # the first reference is argv[0] which is the pathname used to execute the binary
         at_execfn = ctypes.addressof(self.refs[0])
 
-
-        #auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
-
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
         # loaded in memory. Please note that they should remain at their
@@ -483,7 +480,7 @@ class Stack:
         for name in [x for x in dir(Stack) if x.startswith("AT_")]:
             at_names[getattr(Stack, name)] = name
 
-        for i in range(0, end+1):
+        for i in range(0, end + 1):
             if i == env_off:
                 log(" envp")
             elif i >= aux_off:
@@ -636,7 +633,7 @@ class CodeGenX86(CodeGenerator):
     def munmap(self, addr, length):
         """
         b8 0b 00 00 00       	mov    $0xb,%eax
-	bb 66 66 00 00       	mov    $0x6666,%ebx
+        bb 66 66 00 00       	mov    $0x6666,%ebx
         51                   	push   %ecx
         b9 42 42 00 00       	mov    $0x4242,%ecx
         cd 80                	int    $0x80
@@ -659,9 +656,9 @@ class CodeGenX86(CodeGenerator):
         59                   	pop    %ecx
         """
         buf = b"\xbe%s\xbf%s\x01\xcf\x51\xb9%s\xf3\xa4\x59" % (
-                struct.pack("<L", src),
-                struct.pack("<L", off),
-                struct.pack("<L", sz),
+            struct.pack("<L", src),
+            struct.pack("<L", off),
+            struct.pack("<L", sz),
         )
         self.log("Generated memcpy call (dst=%%ecs + 0x%.8x, src=0x%.8x, size=0x%.8x)" % (off, src, sz))
         return buf
@@ -672,7 +669,7 @@ class CodeGenX86(CodeGenerator):
         68 00 10 00 00          push $0x1000
         89 e3                	mov    %esp,%ebx
         cd 80                	int    $0x80
- 	89 c1                	mov    %eax,%ecx
+        89 c1                	mov    %eax,%ecx
         """
 
         # push eax + save return value to where exactly? what register
