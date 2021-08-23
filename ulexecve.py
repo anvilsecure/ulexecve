@@ -39,7 +39,7 @@ import tempfile
 from ctypes import c_int, c_size_t, c_ulong, c_void_p, memmove
 from ctypes.util import find_library
 
-__version__ = "0.6"
+__version__ = "0.7"
 
 libc = ctypes.CDLL(find_library('c'))
 
