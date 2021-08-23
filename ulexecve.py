@@ -388,7 +388,7 @@ class Stack:
         i = i + 1
 
         aux_off = i + env_off
-        self.auxv_start = aux_off << 3
+        self.auxv_start = aux_off << (2 if self.is_32bit else 3)
 
         end_off = self.setup_auxv(aux_off, exe)
 
