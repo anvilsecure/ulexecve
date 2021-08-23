@@ -479,7 +479,7 @@ class Stack:
         for name in [x for x in dir(Stack) if x.startswith("AT_")]:
             at_names[getattr(Stack, name)] = name
 
-        for i in range(0, end):
+        for i in range(0, end+1):
             if i == env_off:
                 log(" envp")
             elif i >= aux_off:
