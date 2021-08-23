@@ -117,15 +117,20 @@ MAP_FIXED = 0x10
 PT_LOAD = 0x1
 PT_INTERP = 0x3
 EM_X86_64 = 0x3e
+EM_386 = 0x3
 
 
-def display_jumpbuf(buf):
+def display_jumpbuf(machine, buf):
+
+    machines = {EM_386: "i386", EM_X86_64: "i386:x86-64"}
+    assert(machine in machines)
+
     with tempfile.NamedTemporaryFile(suffix=".jumpbuf.bin", mode="wb") as tmp:
         tmp.write(buf)
         tmp.seek(0)
-        logging.debug("Written jumpbuf to %s" % tmp.name)
-        # To disassemble run the following command with temp filename  appended to it
-        cmd = "objdump -m i386:x86-64 -b binary -D %s" % tmp.name
+        logging.debug("Written jumpbuf to %s (#%u bytes)" % (tmp.name, len(buf)))
+        # To disassemble run the following command with temp filename appended to it
+        cmd = "objdump -m %s -b binary -D %s" % (machines[machine], tmp.name)
         logging.debug("Executing: %s" % cmd)
         try:
             output = subprocess.check_output(cmd.split(" "))
@@ -172,6 +177,23 @@ class ELFParser:
         buf = self.stream.read(sz)
         return (struct.unpack("%c%s" % ("<" if self.is_little_endian else ">", fmt), buf), buf)
 
+    def unpack_ehdr(self):
+        fmt = "HHIIIIIHHHHHH" if self.is_32bit else "HHIQQQIHHHHHH"
+        return self.unpack(fmt)
+
+    def unpack_phdr(self):
+        # Unpack as the order of the values is different for 32-bit or 64-bit
+        # program headers so we can return the values in a consistent order
+        if self.is_32bit:
+            fmt = "IIIIIIII"
+            values, buf = self.unpack(fmt)
+            p_type, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align = values
+        else:
+            fmt = "IIQQQQQQ"
+            values, buf = self.unpack(fmt)
+            p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align = values
+        return ((p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align), buf)
+
     def parse(self):
         self.parse_head()
         self.parse_ehdr()
@@ -184,10 +206,10 @@ class ELFParser:
             raise ELFParsingError("Not an ELF file")
 
         bittype = self.stream.read(1)
-        if bittype == b"\x01":
-            raise ELFParsingError("Not implemented 32-bit ELF parsing")
-        elif bittype != b"\x02":
+        if bittype not in (b"\x01", b"\x02"):
             raise ELFParsingError("Unknown EI class specified")
+
+        self.is_32bit = True if bittype == b"\x01" else False
 
         b = self.stream.read(1)
         if b == b"\x01":
@@ -201,7 +223,7 @@ class ELFParser:
 
     def parse_ehdr(self):
         self.stream.seek(16)
-        values, buf = self.unpack("HHIQQQIHHHHHH")
+        values, buf = self.unpack_ehdr()
         self.e_type, self.e_machine, self.e_version, self.e_entry, \
             self.e_phoff, self.e_shoff, self.e_flags, self.e_ehsize, self.e_phentsize, \
             self.e_phnum, self.e_shentsize, self.e_shnum, self.e_shstrndx = values
@@ -213,7 +235,7 @@ class ELFParser:
         if self.e_phnum == 0:
             raise ELFParsingError("No program headers found in ELF")
 
-        if self.e_machine != EM_X86_64:
+        if self.e_machine not in (EM_X86_64, EM_386):
             raise ELFParsingError("ELF machine type is not x86-64")
 
     def parse_pentries(self):
@@ -222,7 +244,7 @@ class ELFParser:
             self.parse_pentry()
 
     def parse_pentry(self):
-        values, _ = self.unpack("IIQQQQQQ")
+        values, _ = self.unpack_phdr()
         p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, \
             p_align = values
 
@@ -313,11 +335,13 @@ class Stack:
     AT_MINSIGSTKSZ = 51  # stack needed for signal delivery (AArch64)
 
     # Offsets so that we can fixup the auxv header values later on from the jumpcode
-    OFFSET_AT_BASE = (1 << 3)
-    OFFSET_AT_PHDR = (3 << 3)
-    OFFSET_AT_ENTRY = (5 << 3)
+    # The users of these offset need to multiple them by the size of c_size_t for the
+    # platform they're used
+    OFFSET_AT_BASE = 1
+    OFFSET_AT_PHDR = 3
+    OFFSET_AT_ENTRY = 5
 
-    def __init__(self, num_pages):
+    def __init__(self, num_pages, is_32bit=False):
         self.size = 2048 * PAGE_SIZE
         self.base = mmap(0, self.size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_GROWSDOWN, -1, 0)
         ctypes.memset(self.base, 0, self.size)
@@ -329,6 +353,7 @@ class Stack:
         self.refs = []
 
         self.auxv_start = 0
+        self.is_32bit = is_32bit
 
     def add_ref(self, obj):
         # we simply add the object to the list so that the garbage collector
@@ -363,7 +388,7 @@ class Stack:
         i = i + 1
 
         aux_off = i + env_off
-        self.auxv_start = aux_off << 3
+        self.auxv_start = aux_off << (2 if self.is_32bit else 3)
 
         end_off = self.setup_auxv(aux_off, exe)
 
@@ -373,7 +398,8 @@ class Stack:
         auxv_ptr = self.base + off
 
         at_sysinfo_ehdr = getauxval(Stack.AT_SYSINFO_EHDR)
-        logging.debug("vDSO loaded at 0x%.8x (Auxv entry AT_SYSINFO_EHDR)" % (at_sysinfo_ehdr))
+        at_sysinfo = getauxval(Stack.AT_SYSINFO)
+        logging.debug("vDSO loaded at 0x%.8x (Auxv entry AT_SYSINFO_EHDR), AT_SYSINFO: 0x%.8x" % (at_sysinfo_ehdr, at_sysinfo))
 
         at_clktck = getauxval(Stack.AT_CLKTCK)
         at_hwcap = getauxval(Stack.AT_HWCAP)
@@ -387,6 +413,9 @@ class Stack:
 
         # the first reference is argv[0] which is the pathname used to execute the binary
         at_execfn = ctypes.addressof(self.refs[0])
+
+
+        #auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
 
         # AT_BASE, AT_PHDR, AT_ENTRY will be fixed up later by the jumpcode as
         # at this point in time we don't know yet where everything will be
@@ -412,7 +441,7 @@ class Stack:
         auxv.append((Stack.AT_PAGESZ, PAGE_SIZE))
         auxv.append((Stack.AT_SECURE, 0))
         auxv.append((Stack.AT_RANDOM, auxv_ptr))  # XXX now just points to start of auxv
-        auxv.append((Stack.AT_SYSINFO, 0))  # should not be present or simply zero on x86-64
+        auxv.append((Stack.AT_SYSINFO, at_sysinfo))
         auxv.append((Stack.AT_SYSINFO_EHDR, at_sysinfo_ehdr))
         auxv.append((Stack.AT_PLATFORM, at_platform))
         auxv.append((Stack.AT_EXECFN, at_execfn))
@@ -454,7 +483,7 @@ class Stack:
         for name in [x for x in dir(Stack) if x.startswith("AT_")]:
             at_names[getattr(Stack, name)] = name
 
-        for i in range(0, end):
+        for i in range(0, end+1):
             if i == env_off:
                 log(" envp")
             elif i >= aux_off:
@@ -463,77 +492,36 @@ class Stack:
                 if (i - aux_off) % 2 == 1:
                     val = stack[i - 1]
                     name = at_names[val]
-                    log("  %.8x:   0x%.16x 0x%.16x (%s)" % ((i - 1) * 8, val, stack[i], name))
+                    if self.is_32bit:
+                        log("  %.8x:   0x%.8x 0x%.8x (%s)" % ((i - 1) * 4, val, stack[i], name))
+                    else:
+                        log("  %.8x:   0x%.16x 0x%.16x (%s)" % ((i - 1) * 8, val, stack[i], name))
             else:
-                log("  %.8x:   0x%.16x" % (i * 8, stack[i]))
+                if self.is_32bit:
+                    log("  %.8x:   0x%.8x" % (i * 4, stack[i]))
+                else:
+                    log("  %.8x:   0x%.16x" % (i * 8, stack[i]))
 
 
 class CodeGenerator:
     def __init__(self, exe, interp=None):
-        assert(exe.e_machine == EM_X86_64)
         if interp:
-            assert(interp.e_machine == EM_X86_64)
+            assert(exe.e_machine == interp.e_machine)
         self.exe = exe
         self.interp = interp
 
+    @staticmethod
+    def get_code_generator(exe, interp=None):
+        machines = {EM_386: CodeGenX86, EM_X86_64: CodeGenX86_64}
+        keys = machines.keys()
+        assert(exe.e_machine in keys)
+        if interp:
+            assert(interp.e_machine in keys)
+            assert(exe.e_machine == interp.e_machine)
+        return machines[exe.e_machine](exe, interp)
+
     def log(self, logline):
         logging.debug("%s" % (logline))
-
-    def generate(self, stack, jump_delay=None):
-        # generate jump buffer with the CPU instructions which copy all
-        # segments to the right locations in memory, set the correct protection
-        # flags on those memory segments and then prepare for the actual jump
-        # into hail mary land.
-
-        # generate ELF loading code for the executable as well as the
-        # interpreter if necessary
-        ret = []
-        code = self.generate_elf_loader(self.exe)
-        ret.append(code)
-
-        # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_PHDR, self.exe.e_phoff)
-        ret.append(code)
-
-        # fix up the auxv vector with the proper relative addresses too
-        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_ENTRY, self.exe.e_entry, self.exe.is_pie)
-        ret.append(code)
-
-        if self.interp:
-            code = self.generate_elf_loader(self.interp)
-            ret.append(code)
-            code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_BASE, 0)
-            ret.append(code)
-            entry_point = self.interp.e_entry
-        else:
-            entry_point = self.exe.e_entry
-            if not self.exe.is_pie:
-                entry_point -= self.exe.ph_entries[0]["vaddr"]
-
-        self.log("Generating jumpcode with entry_point=0x%.16x and stack=0x%.16x" % (entry_point, stack.base))
-
-        code = self.generate_jumpcode(stack.base, entry_point, jump_delay)
-        ret.append(code)
-
-        return b"".join(ret)
-
-    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
-        """
-        49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
-        43 42 41
-        4d 01 de                add    %r11,%r14
-        49 bf 11 11 11 11 11    movabs $0x1111111111111111,%r15
-        11 11 11
-        4d 89 37                mov    %r14,(%r15)
-        """
-        # write at location within auxv the value %r11 + map_offset
-        auxv_ptr = stack.base + stack.auxv_start + auxv_offset
-        ret = []
-        ret.append(b"\x49\xbe%s" % struct.pack("<Q", map_offset))
-        if relative:
-            ret.append(b"\x4d\x01\xde")
-        ret.append(b"\x49\xbf%s\x4d\x89\x37" % (struct.pack("<Q", auxv_ptr)))
-        return b"".join(ret)
 
     def generate_elf_loader(self, elf):
         PF_R = 0x4
@@ -574,9 +562,215 @@ class CodeGenerator:
             prot |= (PROT_WRITE if (flags & PF_W) != 0 else 0)
             prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
+            # TODO: implement mprotect() call to properly setup protection
+            # flags againfor memory segments
             # code = self.mprotect(dst, PAGE_CEIL(memsz), prot)
             # ret.append(code)
 
+        return b"".join(ret)
+
+    def generate(self, stack, jump_delay=None):
+        # generate jump buffer with the CPU instructions which copy all
+        # segments to the right locations in memory, set the correct protection
+        # flags on those memory segments and then prepare for the actual jump
+        # into hail mary land.
+
+        # generate ELF loading code for the executable as well as the
+        # interpreter if necessary
+        ret = []
+        code = self.generate_elf_loader(self.exe)
+        ret.append(code)
+
+        # fix up the auxv vector with the proper relative addresses too
+        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_PHDR, self.exe.e_phoff)
+        ret.append(code)
+
+        # fix up the auxv vector with the proper relative addresses too
+        code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_ENTRY, self.exe.e_entry, self.exe.is_pie)
+        ret.append(code)
+
+        if self.interp:
+            code = self.generate_elf_loader(self.interp)
+            ret.append(code)
+            code = self.generate_auxv_fixup(stack, Stack.OFFSET_AT_BASE, 0)
+            ret.append(code)
+            entry_point = self.interp.e_entry
+        else:
+            entry_point = self.exe.e_entry
+            if not self.exe.is_pie:
+                entry_point -= self.exe.ph_entries[0]["vaddr"]
+
+        self.log("Generating jumpcode with entry_point=0x%.8x and stack=0x%.8x" % (entry_point, stack.base))
+
+        code = self.generate_jumpcode(stack.base, entry_point, jump_delay)
+        ret.append(code)
+
+        return b"".join(ret)
+
+    def mprotect(self, addr, length, prot):
+        raise NotImplementedError
+
+    def munmap(self, addr, length):
+        raise NotImplementedError
+
+    def memcpy_from_offset(self, off, src, sz):
+        raise NotImplementedError
+
+    def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
+        raise NotImplementedError
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        raise NotImplementedError
+
+
+class CodeGenX86(CodeGenerator):
+    def __init__(self, exe, interp=None):
+        assert(exe.e_machine == EM_386)
+        if interp:
+            assert(interp.e_machine == EM_386)
+        CodeGenerator.__init__(self, exe, interp)
+
+    def mprotect(self, addr, length, prot):
+        raise NotImplementedError
+
+    def munmap(self, addr, length):
+        """
+        b8 0b 00 00 00       	mov    $0xb,%eax
+	bb 66 66 00 00       	mov    $0x6666,%ebx
+        51                   	push   %ecx
+        b9 42 42 00 00       	mov    $0x4242,%ecx
+        cd 80                	int    $0x80
+        59                      pop    %ecx
+        """
+        buf = b"\xb8\x5b\x00\x00\x00\xbb%s\x51\xb9%s\xcd\x80\x59" % (
+            struct.pack("<L", addr),
+            struct.pack("<L", length)
+        )
+        return buf
+
+    def memcpy_from_offset(self, off, src, sz):
+        """
+        be 41 41 41 41       	mov    $0x41414141,%esi
+        bf 42 42 42 42       	mov    $0x42424242,%edi
+        01 cf                	add    %ecx,%edi
+        51                   	push   %ecx
+        b9 00 01 00 00       	mov    $0x100,%ecx
+        f3 a4                	rep movsb %ds:(%esi),%es:(%edi)
+        59                   	pop    %ecx
+        """
+        buf = b"\xbe%s\xbf%s\x01\xcf\x51\xb9%s\xf3\xa4\x59" % (
+                struct.pack("<L", src),
+                struct.pack("<L", off),
+                struct.pack("<L", sz),
+        )
+        self.log("Generated memcpy call (dst=%%ecs + 0x%.8x, src=0x%.8x, size=0x%.8x)" % (off, src, sz))
+        return buf
+
+    def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
+        """
+        b8 5a 00 00 00       	mov    $0x5a,%eax
+        68 00 10 00 00          push $0x1000
+        89 e3                	mov    %esp,%ebx
+        cd 80                	int    $0x80
+ 	89 c1                	mov    %eax,%ecx
+        """
+
+        # push eax + save return value to where exactly? what register
+        # can we use?
+
+        # for x86 we need to push all arguments on the stack as mmap() gets
+        # more arguments than there are registers
+        insts = [b"\xb8\x5a\x00\x00\x00"]
+
+        # reverse order the structure onto the stack
+        args = (offset, fd, flags, prot, length, addr)
+        for arg in args:
+            insts.append(b"\x68%s" % struct.pack("<L", arg))
+
+        insts.append(b"\x89\xe3\xcd\x80\x89\xc1")
+        self.log("Generated mmap call (addr=0x%.8x, length=0x%.8x, prot=0x%x, flags=0x%x)" % (addr, length, prot, flags))
+        return b"".join(insts)
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        """
+        b8 44 43 42 41       	mov    $0x41424344,%eax
+        01 c8                	add    %ecx,%eax
+        bb 54 53 52 51       	mov    $0x51525354,%ebx
+        89 03                	mov    %eax,(%ebx)
+        """
+        # write at location within auxv the value %ecx + map_offset
+        auxv_ptr = stack.base + stack.auxv_start + (auxv_offset << 2)
+        ret = []
+        ret.append(b"\xb8%s" % struct.pack("<L", map_offset))
+        if relative:
+            ret.append(b"\x01\xc8")
+        ret.append(b"\xbb%s\x89\x03" % (struct.pack("<L", auxv_ptr)))
+        return b"".join(ret)
+
+    def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
+        buf = []
+        if jump_delay:
+            """
+            51                   	push   %ecx
+            6a 00                	push   $0x0
+            68 42 41 41 00       	push   $0x414142
+            89 e3                	mov    %esp,%ebx
+            b9 00 00 00 00       	mov    $0x0,%ecx
+            b8 a2 00 00 00       	mov    $0xa2,%eax
+            89 e3                	mov    %esp,%ebx
+            cd 80                	int    $0x80
+            59                   	pop    %ecx
+            59                   	pop    %ecx
+            59                   	pop    %ecx
+            """
+            jd = struct.pack("<L", jump_delay)
+            buf.append(b"\x51\x6a\x00\x68%s\x89\xe3\xb8\x00\x00\x00\x00" % jd)
+            buf.append(b"\xb8\xa2\x00\x00\x00\x89\xe3\xcd\x80\x59\x59\x59")
+
+        # reset main registers (%eax, %ebx, %edx, %ebp, %esp, %esi, %edi) just to be sure and we
+        # do not reset %ecx as that will contain the pointer to our entrypoint
+        main_regs = [b"\xc0", b"\xdb", b"\xd2", b"\xed", b"\xe4", b"\xf6", b"\xff"]
+        for reg in main_regs:
+            buf.append(b"\x31%s" % reg)
+
+        """
+        bc 44 43 42 41       	mov    $0x41424344,%esp
+        81 c1 34 12 00 00    	add    $0x1234,%ecx
+        ff e1                	jmp    *%ecx
+        """
+        buf.append(b"\xbc%s\x81\xc1%s\xff\xe1" % (
+            struct.pack("<L", stack_ptr),
+            struct.pack("<L", entry_ptr))
+        )
+
+        self.log("Jumpbuf with entry %%ecx+0x%x and stack: 0x%.8x" % (entry_ptr, stack_ptr))
+        return b"".join(buf)
+
+
+class CodeGenX86_64(CodeGenerator):
+
+    def __init__(self, exe, interp=None):
+        assert(exe.e_machine == EM_X86_64)
+        if interp:
+            assert(interp.e_machine == EM_X86_64)
+        CodeGenerator.__init__(self, exe, interp)
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        """
+        49 be 48 47 46 45 44    movabs $0x4142434445464748,%r14
+        43 42 41
+        4d 01 de                add    %r11,%r14
+        49 bf 11 11 11 11 11    movabs $0x1111111111111111,%r15
+        11 11 11
+        4d 89 37                mov    %r14,(%r15)
+        """
+        # write at location within auxv the value %r11 + map_offset
+        auxv_ptr = stack.base + stack.auxv_start + (auxv_offset << 3)
+        ret = []
+        ret.append(b"\x49\xbe%s" % struct.pack("<Q", map_offset))
+        if relative:
+            ret.append(b"\x4d\x01\xde")
+        ret.append(b"\x49\xbf%s\x4d\x89\x37" % (struct.pack("<Q", auxv_ptr)))
         return b"".join(ret)
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
@@ -613,6 +807,7 @@ class CodeGenerator:
         43 42 41
         4c 01 df                add    %r11,%rdi
         """
+        # TODO fix up the comment above
         buf = b"\x48\xbe%s\x48\xbf%s\x4c\x01\xdf\x48\xb9%s\xf3\xa4" % (
             struct.pack("<Q", src),
             struct.pack("<Q", off),
@@ -684,6 +879,8 @@ class CodeGenerator:
 
 class ELFExecutor:
     def __init__(self, binstream, binname):
+        # XXX check if ELF machine type is same as calling code
+        # else we will fail due to ctypes size mismatch anyway
         binstream.seek(0)
         try:
             exe = ELFParser(binstream)
@@ -714,7 +911,7 @@ class ELFExecutor:
 
     def execute(self, args, show_jumpbuf=False, show_stack=False, jump_delay=None):
         # construct a stack with 2k pages, pass argv, envp and build it up
-        self.stack = stack = Stack(2048)
+        self.stack = stack = Stack(2048, self.exe.is_32bit)
         argv = [self.binname] + args
         envp = []
         for name in os.environ:
@@ -722,11 +919,13 @@ class ELFExecutor:
         stack.setup(argv, envp, self.exe, show_stack=show_stack)
 
         # run the code generator to build up the jump buffer
-        cg = CodeGenerator(self.exe, self.interp)
+        cg = CodeGenerator.get_code_generator(self.exe, self.interp)
         jumpbuf = cg.generate(stack, jump_delay)
 
         if show_jumpbuf:
-            display_jumpbuf(jumpbuf)
+            # we just pass in the e_machine from the ELF executable so the display routine
+            # can properly set the arguments for the external call to objdump
+            display_jumpbuf(self.exe.e_machine, jumpbuf)
 
         # The full buffer of instructions was setup, now all we need to do is
         # map this to memory and set it such that that segment is executable so
