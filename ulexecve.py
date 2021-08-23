@@ -36,7 +36,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from ctypes import c_int, c_size_t, c_ulong, c_void_p, memmove
+from ctypes import c_int, c_size_t, c_ulong, c_void_p, memmove, sizeof
 from ctypes.util import find_library
 
 __version__ = "0.7"
@@ -58,11 +58,11 @@ def _emulate_getauxval(ltype):
     with open("/proc/self/auxv", "rb") as fd:
         data = fd.read()
 
-        # NOTE: would have to change if ported to 32-bit
-        isize = 8
+        isize = sizeof(c_size_t)
+        fmt = "QQ" if isize == 8 else "LL"
         data = [data[x: x + (isize << 1)] for x in range(0, len(data), (isize << 1))]
         for d in data:
-            key, val = struct.unpack("<QQ", d)
+            key, val = struct.unpack("<%s" % fmt, d)
             if key == ltype:
                 return val
     return 0x0
