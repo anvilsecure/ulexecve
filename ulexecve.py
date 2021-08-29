@@ -1019,6 +1019,17 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    if ns.fallback:
+        if ns.jump_delay:
+            logging.error("cannot use --jump-delay with --fallback")
+            sys.exit(1)
+        if ns.show_jumpbuf:
+            logging.error("cannot use --show-jumpbuf with --fallback")
+            sys.exit(1)
+        if ns.show_stack:
+            logging.error("cannot use --show-stack with --fallback")
+            sys.exit(1)
+
     if ns.jump_delay:
         if ns.jump_delay < 0:
             logging.error("jump delay cannot be negative")
