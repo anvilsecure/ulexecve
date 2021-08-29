@@ -979,17 +979,17 @@ class MemFdExecutor:
         if ret != sz:
             raise RuntimeError("write() failed to write all bytes of binary")
 
-        self.argv = [self.binname] + args
-        self.envp = []
+        argv = [self.binname] + args
+        envp = []
         for name in os.environ:
-            self.envp.append("%s=%s" % (name, os.environ[name]))
+            envp.append("%s=%s" % (name, os.environ[name]))
 
-        self.l_argv = [a.encode("utf-8", errors="ignore") for a in self.argv]
-        self.l_envp = [e.encode("utf-8", errors="ignore") for e in self.envp]
-        self.c_argv = (c_char_p * len(self.l_argv))(*self.l_argv)
-        self.c_envp = (c_char_p * len(self.l_envp))(*self.l_envp)
+        l_argv = [a.encode("utf-8", errors="ignore") for a in argv]
+        l_envp = [e.encode("utf-8", errors="ignore") for e in envp]
+        c_argv = (c_char_p * (len(l_argv) + 1))(*l_argv)
+        c_envp = (c_char_p * (len(l_envp) + 1))(*l_envp)
 
-        fexecve(fd, self.c_argv, self.c_envp)
+        fexecve(fd, c_argv, c_envp)
         no = ctypes.get_errno()
 
         logging.error("fexecve() failed: %s: %s" % (errno.errorcode[no], os.strerror(no)))
