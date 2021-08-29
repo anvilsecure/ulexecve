@@ -30,18 +30,20 @@
 
 import argparse
 import ctypes
+import errno
 import logging
 import os
 import struct
 import subprocess
 import sys
 import tempfile
-from ctypes import c_int, c_size_t, c_ulong, c_void_p, memmove, sizeof
+from ctypes import (POINTER, c_char_p, c_int, c_size_t, c_uint, c_ulong,
+                    c_void_p, memmove, sizeof)
 from ctypes.util import find_library
 
 __version__ = "0.7"
 
-libc = ctypes.CDLL(find_library('c'))
+libc = ctypes.CDLL(find_library('c'), use_errno=True)
 
 PAGE_SIZE = ctypes.pythonapi.getpagesize()
 
@@ -933,11 +935,70 @@ class ELFExecutor:
         cfunction()
 
 
+class MemFdExecutor:
+    def __init__(self, binstream, binname):
+        self.binname = binname
+
+        binstream.seek(0)
+        self.bindata = binstream.read()
+
+    def execute(self, args, *kwargs):
+        argtypes = [c_char_p, c_uint]
+        restype = c_int
+        try:
+            memfd_create = libc.memfd_create
+            memfd_create.argtypes = argtypes
+            memfd_create.restype = restype
+        except AttributeError:
+            sc = libc.syscall
+            sc.argtypes = [c_long] + argtypes
+            sc.restype = restype
+            syscall_no = 319 # needs to be arch dependently selected XXX
+            def fn(*args):
+                return sc(syscall_no, *args)
+            memfd_create = fn
+
+        try:
+            fexecve = libc.fexecve
+            fexecve.argtypes = [c_int, POINTER(c_char_p), POINTER(c_char_p)]
+            fexecve.restype = restype
+        except AttributeError:
+            logging.error("fexecve() not defined (glibc older than 2.3.2 or non-glibc system?)")
+            sys.exit(1)
+
+        MFD_CLOEXEC = 0x1
+
+        # the filename is only for debugging purposes so we won't even bother setting it
+        fd = memfd_create(b"", MFD_CLOEXEC)
+        if fd == -1:
+            raise RuntimeError("memfd_create() failed")
+        sz = len(self.bindata)
+        ret = libc.write(fd, self.bindata, sz)
+        if ret != sz:
+            raise RuntimeError("write() failed to write all bytes of binary")
+
+        self.argv = [self.binname] + args
+        self.envp = []
+        for name in os.environ:
+            self.envp.append("%s=%s" % (name, os.environ[name]))
+
+        self.l_argv = [a.encode("utf-8", errors="ignore") for a in self.argv]
+        self.l_envp = [e.encode("utf-8", errors="ignore") for e in self.envp]
+        self.c_argv = (c_char_p * len(self.l_argv))(*self.l_argv)
+        self.c_envp = (c_char_p * len(self.l_envp))(*self.l_envp)
+
+        fexecve(fd, self.c_argv, self.c_envp)
+        no = ctypes.get_errno()
+
+        logging.error("fexecve() failed: %s: %s" % (errno.errorcode[no], os.strerror(no)))
+        sys.exit(1)
+
 def main():
     parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary, any arguments to it and then sit back and pray.",
                                      usage="%(prog)s [options] <binary> [arguments]")
 
     parser.add_argument("--debug", action="store_true", help="output info useful for debugging a crashing binary")
+    parser.add_argument("--fallback", action="store_true", help="use fallback method with memfd_create")
     parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
     parser.add_argument("--show-stack", action="store_true", help="show stack contents")
@@ -972,9 +1033,12 @@ def main():
     else:
         binfd = open(binary, "rb")
 
-    executor = ELFExecutor(binfd, binary)
-    binfd.close()
+    if ns.fallback:
+        executor = MemFdExecutor(binfd, binary)
+    else:
+        executor = ELFExecutor(binfd, binary)
 
+    binfd.close()
     executor.execute(args, ns.show_jumpbuf, ns.show_stack, ns.jump_delay)
 
 
