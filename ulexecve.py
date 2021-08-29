@@ -37,8 +37,8 @@ import struct
 import subprocess
 import sys
 import tempfile
-from ctypes import (POINTER, c_char_p, c_int, c_size_t, c_uint, c_ulong,
-                    c_void_p, memmove, sizeof)
+from ctypes import (POINTER, c_char_p, c_int, c_long, c_size_t, c_uint,
+                    c_ulong, c_void_p, memmove, sizeof)
 from ctypes.util import find_library
 
 __version__ = "0.7"
@@ -953,9 +953,11 @@ class MemFdExecutor:
             sc = libc.syscall
             sc.argtypes = [c_long] + argtypes
             sc.restype = restype
-            syscall_no = 319 # needs to be arch dependently selected XXX
+            syscall_no = 319  # needs to be arch dependently selected XXX
+
             def fn(*args):
                 return sc(syscall_no, *args)
+
             memfd_create = fn
 
         try:
@@ -992,6 +994,7 @@ class MemFdExecutor:
 
         logging.error("fexecve() failed: %s: %s" % (errno.errorcode[no], os.strerror(no)))
         sys.exit(1)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary, any arguments to it and then sit back and pray.",
