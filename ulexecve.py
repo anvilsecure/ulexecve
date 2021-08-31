@@ -720,7 +720,7 @@ class CodeGenAarch64(CodeGenerator):
 
         if relative:
             # 8b100000        add     x0, x0, x16
-            ret.append("\x00\x00\x10\x8b")
+            ret.append(b"\x00\x00\x10\x8b")
             pass
 
         ret.append(self.mov_enc(1, auxv_ptr))
