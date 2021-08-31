@@ -714,8 +714,20 @@ class CodeGenAarch64(CodeGenerator):
         return buf
 
     def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
-        return b""
-        raise NotImplementedError
+        # write at location within auxv the value %r15+ map_offset
+        auxv_ptr = stack.base + stack.auxv_start + (auxv_offset << 3)
+        ret = []
+        ret.append(self.mov_enc(0, map_offset))
+
+        if relative:
+            # 8b100000        add     x0, x0, x16
+            ret.append("\x00\x00\x10\x8b")
+            pass
+
+        ret.append(self.mov_enc(1, auxv_ptr))
+        # f9000020        str     x0, [x1]
+        ret.append(b"\x20\x00\x00\xf9")
+        return b"".join(ret)
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
         """
@@ -725,7 +737,16 @@ class CodeGenAarch64(CodeGenerator):
         """
         if jump_delay:
             raise NotImplementedError("jumpcode not implemented yet for aarch64")
-        return b"%s%s\x00\x00\x10\x8b\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
+
+        # zero out all registers except x0, x1 and x16
+        reset = []
+        for reg in range(2, 16):
+            reset.append(struct.pack("<L", (0xd2800000 | reg)))
+        for reg in range(17, 33):
+            reset.append(struct.pack("<L", (0xd2800000 | reg)))
+
+        return b"%s%s%s\x00\x00\x10\x8b\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
+            b"".join(reset),
             self.mov_enc(0, entry_ptr),
             self.mov_enc(1, stack_ptr)
         )
