@@ -41,7 +41,7 @@ from ctypes import (POINTER, c_char_p, c_int, c_long, c_size_t, c_uint,
                     c_ulong, c_void_p, memmove, sizeof)
 from ctypes.util import find_library
 
-__version__ = "0.8"
+__version__ = "0.9"
 
 libc = ctypes.CDLL(find_library('c'), use_errno=True)
 
