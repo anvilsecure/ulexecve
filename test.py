@@ -241,5 +241,20 @@ class TestBinaries(unittest.TestCase):
         self.assertEqual(b"hello world from golang\n", output)
 
 
+class TestFallback(unittest.TestCase):
+    def test_bins(self):
+        # run /bin/cat and /bin/ls and see if those work fine
+        py_fn = u.__file__
+        cat_fn = "/bin/cat"
+        cmd = "echo hello | %s %s --fallback %s" % (python_bin, py_fn, cat_fn)
+        output = subprocess.check_output(cmd, shell=True)
+        self.assertEqual(b"hello\n", output)
+
+        cat_fn = "/bin/ls -lha"
+        cmd = "%s %s --fallback %s %s" % (python_bin, py_fn, cat_fn, os.path.basename(py_fn))
+        output = subprocess.check_output(cmd, shell=True)
+        self.assertNotEqual(output.find(os.path.basename(py_fn).encode("utf-8")), -1)
+
+
 if __name__ == "__main__":
     unittest.main()

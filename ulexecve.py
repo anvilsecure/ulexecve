@@ -30,18 +30,20 @@
 
 import argparse
 import ctypes
+import errno
 import logging
 import os
 import struct
 import subprocess
 import sys
 import tempfile
-from ctypes import c_int, c_size_t, c_ulong, c_void_p, memmove, sizeof
+from ctypes import (POINTER, c_char_p, c_int, c_long, c_size_t, c_uint,
+                    c_ulong, c_void_p, memmove, sizeof)
 from ctypes.util import find_library
 
 __version__ = "0.7"
 
-libc = ctypes.CDLL(find_library('c'))
+libc = ctypes.CDLL(find_library('c'), use_errno=True)
 
 PAGE_SIZE = ctypes.pythonapi.getpagesize()
 
@@ -933,11 +935,94 @@ class ELFExecutor:
         cfunction()
 
 
+class MemFdExecutor:
+    def __init__(self, binstream, binname):
+        self.binname = binname
+
+        binstream.seek(0)
+        self.bindata = binstream.read()
+
+    @staticmethod
+    def _get_memfd_create_fn():
+        argtypes = [c_char_p, c_uint]
+        restype = c_int
+        try:
+            memfd_create = libc.memfd_create
+            memfd_create.argtypes = argtypes
+            memfd_create.restype = restype
+        except AttributeError:
+            sc = libc.syscall
+            sc.argtypes = [c_long] + argtypes
+            sc.restype = restype
+
+            machine = os.uname().machine
+            if machine == "x86_64":
+                syscall_no = 319
+            elif machine == "x86":
+                syscall_no = 356
+            else:
+                raise ValueError("unsupported machine type returned: %s" % machine)
+
+            def fn(*args):
+                return sc(syscall_no, *args)
+
+            memfd_create = fn
+        return memfd_create
+
+    @staticmethod
+    def _get_fexecve_fn():
+        try:
+            fexecve = libc.fexecve
+            fexecve.argtypes = [c_int, POINTER(c_char_p), POINTER(c_char_p)]
+            fexecve.restype = c_int
+        except AttributeError:
+            logging.error("fexecve() not defined (glibc older than 2.3.2 or non-glibc system?)")
+            sys.exit(1)
+        return fexecve
+
+    def execute(self, args, *kwargs):
+        # setup references to libc functions we need
+        memfd_create = MemFdExecutor._get_memfd_create_fn()
+        fexecve = MemFdExecutor._get_fexecve_fn()
+
+        # the filename is only for debugging purposes so we won't even bother setting it
+        MFD_CLOEXEC = 0x1
+        fd = memfd_create(b"", MFD_CLOEXEC)
+        if fd == -1:
+            raise RuntimeError("memfd_create() failed")
+        sz = len(self.bindata)
+        ret = libc.write(fd, self.bindata, sz)
+        if ret != sz:
+            raise RuntimeError("write() failed to write all bytes of binary")
+
+        # setup argv and envp
+        argv = [self.binname] + args
+        envp = []
+        for name in os.environ:
+            envp.append("%s=%s" % (name, os.environ[name]))
+
+        # UTF-8 encode to bytes and copy to ctypes managed char * array
+        l_argv = [a.encode("utf-8", errors="ignore") for a in argv]
+        l_envp = [e.encode("utf-8", errors="ignore") for e in envp]
+        c_argv = (c_char_p * (len(l_argv) + 1))(*l_argv)
+        c_envp = (c_char_p * (len(l_envp) + 1))(*l_envp)
+
+        # call fexecve() which should not return if the target binary executes successfully
+        fexecve(fd, c_argv, c_envp)
+
+        # spit out error if we failed to execute
+        no = ctypes.get_errno()
+        logging.error("fexecve() failed: %s: %s" % (errno.errorcode[no], os.strerror(no)))
+        sys.exit(1)
+
+
 def main():
+
     parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary, any arguments to it and then sit back and pray.",
                                      usage="%(prog)s [options] <binary> [arguments]")
 
     parser.add_argument("--debug", action="store_true", help="output info useful for debugging a crashing binary")
+    parser.add_argument("--fallback", action="store_true", help="use fallback method with memfd_create")
     parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
     parser.add_argument("--show-stack", action="store_true", help="show stack contents")
@@ -955,6 +1040,17 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    if ns.fallback:
+        if ns.jump_delay:
+            logging.error("cannot use --jump-delay with --fallback")
+            sys.exit(1)
+        if ns.show_jumpbuf:
+            logging.error("cannot use --show-jumpbuf with --fallback")
+            sys.exit(1)
+        if ns.show_stack:
+            logging.error("cannot use --show-stack with --fallback")
+            sys.exit(1)
+
     if ns.jump_delay:
         if ns.jump_delay < 0:
             logging.error("jump delay cannot be negative")
@@ -962,6 +1058,11 @@ def main():
         elif ns.jump_delay > 300:
             logging.error("jump delay cannot be bigger than 300")
             sys.exit(1)
+
+    # sanity check where we are being run
+    if os.name != "posix" or os.uname().sysname.lower() != "linux":
+        logging.error("this only works on Linux-based operating systems")
+        sys.exit(1)
 
     binary = ns.command[0]
     args = ns.command[1:]
@@ -972,9 +1073,12 @@ def main():
     else:
         binfd = open(binary, "rb")
 
-    executor = ELFExecutor(binfd, binary)
-    binfd.close()
+    if ns.fallback:
+        executor = MemFdExecutor(binfd, binary)
+    else:
+        executor = ELFExecutor(binfd, binary)
 
+    binfd.close()
     executor.execute(args, ns.show_jumpbuf, ns.show_stack, ns.jump_delay)
 
 
