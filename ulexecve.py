@@ -1099,11 +1099,13 @@ class MemFdExecutor:
             sc.argtypes = [c_long] + argtypes
             sc.restype = restype
 
-            machine = os.uname().machine
+            machine = os.uname()[4]
             if machine == "x86_64":
                 syscall_no = 319
             elif machine == "x86":
                 syscall_no = 356
+            elif machine == "aarch64":
+                syscall_no = 279
             else:
                 raise ValueError("unsupported machine type returned: %s" % machine)
 
@@ -1204,7 +1206,7 @@ def main():
             sys.exit(1)
 
     # sanity check where we are being run
-    if os.name != "posix" or os.uname().sysname.lower() != "linux":
+    if os.name != "posix" or os.uname()[0].lower() != "linux":
         logging.error("this only works on Linux-based operating systems")
         sys.exit(1)
 
