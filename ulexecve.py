@@ -120,11 +120,12 @@ PT_LOAD = 0x1
 PT_INTERP = 0x3
 EM_X86_64 = 0x3e
 EM_386 = 0x3
+EM_AARCH64 = 0xb7
 
 
 def display_jumpbuf(machine, buf):
 
-    machines = {EM_386: "i386", EM_X86_64: "i386:x86-64"}
+    machines = {EM_386: "i386", EM_X86_64: "i386:x86-64", EM_AARCH64: "aarch64"}
     assert(machine in machines)
 
     with tempfile.NamedTemporaryFile(suffix=".jumpbuf.bin", mode="wb") as tmp:
@@ -237,8 +238,8 @@ class ELFParser:
         if self.e_phnum == 0:
             raise ELFParsingError("No program headers found in ELF")
 
-        if self.e_machine not in (EM_X86_64, EM_386):
-            raise ELFParsingError("ELF machine type is not x86-64")
+        if self.e_machine not in (EM_X86_64, EM_386, EM_AARCH64):
+            raise ELFParsingError("ELF machine type is not supported")
 
     def parse_pentries(self):
         self.stream.seek(self.e_phoff)
@@ -511,7 +512,7 @@ class CodeGenerator:
 
     @staticmethod
     def get_code_generator(exe, interp=None):
-        machines = {EM_386: CodeGenX86, EM_X86_64: CodeGenX86_64}
+        machines = {EM_386: CodeGenX86, EM_X86_64: CodeGenX86_64, EM_AARCH64: CodeGenAarch64}
         keys = machines.keys()
         assert(exe.e_machine in keys)
         if interp:
@@ -621,6 +622,149 @@ class CodeGenerator:
     def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
         raise NotImplementedError
 
+    def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
+        raise NotImplementedError
+
+
+class CodeGenAarch64(CodeGenerator):
+
+    def mov_enc(self, reg, value):
+        # this just generates the binary representation for mov commands by
+        # splitting up the mov in 4 move instructions if the value is large
+        # enough; register 0 is just x0, register 2 is x2 and so forth. I know
+        # it's hella dirty but hey it gets the job done.
+        ret = []
+        get_bin = lambda x, n: format(x, 'b').zfill(n)
+        preamble = ["11010010100", "11110010101", "11110010110", "11110010111"]
+        for p in preamble:
+            buf = []
+            buf.append(p)
+            buf.append(get_bin(value & 0xffff, 16))
+            buf.append(get_bin(reg, 5))
+            ret.append("".join(buf))
+            value >>= 16
+            if value == 0:
+                break
+        return b"".join([struct.pack("<L", int(r, 2)) for r in ret])
+
+    def syscall(self, no):
+        return b"%s%s" % (
+                self.mov_enc(8, no),
+                struct.pack("<L", 0xd4000001)
+        )
+
+    def mprotect(self, addr, length, prot):
+        raise NotImplementedError
+
+    def munmap(self, addr, length):
+        buf = b"%s%s%s" % (
+                self.mov_enc(0, addr),
+                self.mov_enc(1, length),
+                self.syscall(215)
+        )
+        return buf
+
+    def memcpy_from_offset(self, off, src, sz):
+        """
+        8b100021        add     x1, x1, x16
+        8b020023        add     x3, x1, x2
+
+        000000000000020c <loopstart>:
+        eb01007f        cmp     x3, x1
+        540000c3        b.cc 228 <loopend>  // b.hs, b.nlast
+        f9400004        ldr     x4, [x0]
+        f9000024        str     x4, [x1]
+        91002000        add     x0, x0, #0x8
+        91002021        add     x1, x1, #0x8
+        17fffffa        b       20c <loopstart>
+        """
+        insts = [0x8b100021, 0x8b020023,
+                0xeb01007f,
+                0x540000c3,
+                0xf9400004, 0xf9000024,
+                0x91002000,
+                0x91002021,
+                0x17fffffa]
+        buf = [
+            self.mov_enc(1, off),
+            self.mov_enc(0, src),
+            self.mov_enc(2, sz)
+        ]
+        for inst in insts:
+            buf.append(struct.pack("<L", inst))
+
+        self.log("Generated memcpy call (dst=%%x16 + 0x%.8x, src=0x%.8x, size=0x%.8x)" % (off, src, sz))
+        return b"".join(buf)
+
+    def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
+        # we store the mmap() result in %x16
+        """
+        400080:       aa0003f0        mov     x16, x0
+        """
+        buf = b"%s%s%s%s%s%s%s%s" % (
+                self.mov_enc(0, addr),
+                self.mov_enc(1, length),
+                self.mov_enc(2, prot),
+                self.mov_enc(3, flags),
+                self.mov_enc(4, fd),
+                self.mov_enc(5, offset),
+                self.syscall(222),
+                b"\xf0\x03\x00\xaa"
+        )
+        self.log("Generated mmap call (addr=0x%.8x, length=0x%.8x, prot=0x%x, flags=0x%x)" % (addr, length, prot, flags))
+        return buf
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        # write at location within auxv the value %r15+ map_offset
+        auxv_ptr = stack.base + stack.auxv_start + (auxv_offset << 3)
+        ret = []
+        ret.append(self.mov_enc(0, map_offset))
+
+        if relative:
+            # 8b100000        add     x0, x0, x16
+            ret.append(b"\x00\x00\x10\x8b")
+            pass
+
+        ret.append(self.mov_enc(1, auxv_ptr))
+        # f9000020        str     x0, [x1]
+        ret.append(b"\x20\x00\x00\xf9")
+        return b"".join(ret)
+
+    def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
+        jump_delay_buf = b""
+        if jump_delay:
+            """
+            d2800001        mov     x1, #0x0                        // #0
+            a90007e0        stp     x0, x1, [sp]
+            910003e0        mov     x0, sp
+            d2800ca8        mov     x8, #0x65                       // #101
+            d4000001        svc     #0x0
+            """
+            insts = [0xd2800001, 0xa90007e0, 0x910003e0,
+                    0xd2800ca8, 0xd4000001]
+            buf = [self.mov_enc(0, jump_delay)]
+            for inst in insts:
+                buf.append(struct.pack("<L", inst))
+            jump_delay_buf = b"".join(buf)
+
+        # zero out all registers except x16
+        reset = []
+        for reg in range(0, 16):
+            reset.append(struct.pack("<L", (0xd2800000 | reg)))
+        for reg in range(17, 32):
+            reset.append(struct.pack("<L", (0xd2800000 | reg)))
+
+        """
+            8b1002d6  add x22, x22, x16
+            910002ff  mov sp, x23
+            d63f02c0  blr x22
+        """
+        return b"%s%s%s%s\xd6\x02\x10\x8b\xff\x02\x00\x91\xc0\x02\x3f\xd6" % (
+            jump_delay_buf,
+            b"".join(reset),
+            self.mov_enc(22, entry_ptr),
+            self.mov_enc(23, stack_ptr)
+        )
 
 class CodeGenX86(CodeGenerator):
     def __init__(self, exe, interp=None):
