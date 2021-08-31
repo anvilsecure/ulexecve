@@ -663,7 +663,6 @@ class CodeGenAarch64(CodeGenerator):
         return buf
 
     def memcpy_from_offset(self, off, src, sz):
-        assert((sz % 4) == 0)
         """
         8b100021        add     x1, x1, x16
         8b020023        add     x3, x1, x2
@@ -730,13 +729,21 @@ class CodeGenAarch64(CodeGenerator):
         return b"".join(ret)
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
-        """
-            8b100000  add x0, x0, x16
-            9100003f  mov sp, x1
-            d63f0000  blr x0
-        """
+        jump_delay_buf = b""
         if jump_delay:
-            raise NotImplementedError("jumpcode not implemented yet for aarch64")
+            """
+            d2800001        mov     x1, #0x0                        // #0
+            a90007e0        stp     x0, x1, [sp]
+            910003e0        mov     x0, sp
+            d2800ca8        mov     x8, #0x65                       // #101
+            d4000001        svc     #0x0
+            """
+            insts = [0xd2800001, 0xa90007e0, 0x910003e0,
+                    0xd2800ca8, 0xd4000001]
+            buf = [self.mov_enc(0, jump_delay)]
+            for inst in insts:
+                buf.append(struct.pack("<L", inst))
+            jump_delay_buf = b"".join(buf)
 
         # zero out all registers except x0, x1 and x16
         reset = []
@@ -745,7 +752,13 @@ class CodeGenAarch64(CodeGenerator):
         for reg in range(17, 33):
             reset.append(struct.pack("<L", (0xd2800000 | reg)))
 
-        return b"%s%s%s\x00\x00\x10\x8b\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
+        """
+            8b100000  add x0, x0, x16
+            9100003f  mov sp, x1
+            d63f0000  blr x0
+        """
+        return b"%s%s%s%s\x00\x00\x10\x8b\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
+            jump_delay_buf,
             b"".join(reset),
             self.mov_enc(0, entry_ptr),
             self.mov_enc(1, stack_ptr)
