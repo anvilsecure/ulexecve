@@ -942,7 +942,8 @@ class MemFdExecutor:
         binstream.seek(0)
         self.bindata = binstream.read()
 
-    def execute(self, args, *kwargs):
+    @staticmethod
+    def _get_memfd_create_fn():
         argtypes = [c_char_p, c_uint]
         restype = c_int
         try:
@@ -953,24 +954,39 @@ class MemFdExecutor:
             sc = libc.syscall
             sc.argtypes = [c_long] + argtypes
             sc.restype = restype
-            syscall_no = 319  # needs to be arch dependently selected XXX
+
+            machine = os.uname().machine
+            if machine == "x86_64":
+                syscall_no = 319
+            elif machine == "x86":
+                syscall_no = 356
+            else:
+                raise ValueError("unsupported machine type returned: %s" % machine)
 
             def fn(*args):
                 return sc(syscall_no, *args)
 
             memfd_create = fn
+        return memfd_create
 
+    @staticmethod
+    def _get_fexecve_fn():
         try:
             fexecve = libc.fexecve
             fexecve.argtypes = [c_int, POINTER(c_char_p), POINTER(c_char_p)]
-            fexecve.restype = restype
+            fexecve.restype = c_int
         except AttributeError:
             logging.error("fexecve() not defined (glibc older than 2.3.2 or non-glibc system?)")
             sys.exit(1)
+        return fexecve
 
-        MFD_CLOEXEC = 0x1
+    def execute(self, args, *kwargs):
+        # setup references to libc functions we need
+        memfd_create = MemFdExecutor._get_memfd_create_fn()
+        fexecve = MemFdExecutor._get_fexecve_fn()
 
         # the filename is only for debugging purposes so we won't even bother setting it
+        MFD_CLOEXEC = 0x1
         fd = memfd_create(b"", MFD_CLOEXEC)
         if fd == -1:
             raise RuntimeError("memfd_create() failed")
@@ -979,24 +995,29 @@ class MemFdExecutor:
         if ret != sz:
             raise RuntimeError("write() failed to write all bytes of binary")
 
+        # setup argv and envp
         argv = [self.binname] + args
         envp = []
         for name in os.environ:
             envp.append("%s=%s" % (name, os.environ[name]))
 
+        # UTF-8 encode to bytes and copy to ctypes managed char * array
         l_argv = [a.encode("utf-8", errors="ignore") for a in argv]
         l_envp = [e.encode("utf-8", errors="ignore") for e in envp]
         c_argv = (c_char_p * (len(l_argv) + 1))(*l_argv)
         c_envp = (c_char_p * (len(l_envp) + 1))(*l_envp)
 
+        # call fexecve() which should not return if the target binary executes successfully
         fexecve(fd, c_argv, c_envp)
-        no = ctypes.get_errno()
 
+        # spit out error if we failed to execute
+        no = ctypes.get_errno()
         logging.error("fexecve() failed: %s: %s" % (errno.errorcode[no], os.strerror(no)))
         sys.exit(1)
 
 
 def main():
+
     parser = argparse.ArgumentParser(description="Attempt to execute an ELF binary in userland. Supply the path to the binary, any arguments to it and then sit back and pray.",
                                      usage="%(prog)s [options] <binary> [arguments]")
 
@@ -1037,6 +1058,11 @@ def main():
         elif ns.jump_delay > 300:
             logging.error("jump delay cannot be bigger than 300")
             sys.exit(1)
+
+    # sanity check where we are being run
+    if os.name != "posix" or os.uname().sysname.lower() != "linux":
+        logging.error("this only works on Linux-based operating systems")
+        sys.exit(1)
 
     binary = ns.command[0]
     args = ns.command[1:]
