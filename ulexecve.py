@@ -282,7 +282,6 @@ class ELFParser:
                     self.is_pie = True
 
             # store extracted program header data
-            buf = b"\x41"*p_filesz
             data = ctypes.create_string_buffer(buf)
             pentry = {"flags": p_flags, "memsz": p_memsz, "vaddr": p_vaddr, "filesz": p_filesz, "offset": p_offset, "data": data}
             self.ph_entries.append(pentry)
@@ -668,7 +667,7 @@ class CodeGenAarch64(CodeGenerator):
 
 000000000000020c <loopstart>:
 eb01007f        cmp     x3, x1
-540000c2        b.cs    228 <loopend>  // b.hs, b.nlast
+540000c3        b.cc 228 <loopend>  // b.hs, b.nlast
 f9400004        ldr     x4, [x0]
 f9000024        str     x4, [x1]
 91002000        add     x0, x0, #0x8
@@ -676,7 +675,8 @@ f9000024        str     x4, [x1]
 17fffffa        b       20c <loopstart>
         """
         insts = [0x8b100021, 0x8b020023,
-                0xeb01007f, 0x540000c2,
+                0xeb01007f,
+                0x540000c3,
                 0xf9400004, 0xf9000024,
                 0x91002000,
                 0x91002021,
