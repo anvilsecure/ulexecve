@@ -745,23 +745,23 @@ class CodeGenAarch64(CodeGenerator):
                 buf.append(struct.pack("<L", inst))
             jump_delay_buf = b"".join(buf)
 
-        # zero out all registers except x0, x1 and x16
+        # zero out all registers except x16
         reset = []
-        for reg in range(2, 16):
+        for reg in range(0, 16):
             reset.append(struct.pack("<L", (0xd2800000 | reg)))
-        for reg in range(17, 33):
+        for reg in range(17, 32):
             reset.append(struct.pack("<L", (0xd2800000 | reg)))
 
         """
-            8b100000  add x0, x0, x16
-            9100003f  mov sp, x1
-            d63f0000  blr x0
+            8b1002d6  add x22, x22, x16
+            910002ff  mov sp, x23
+            d63f02c0  blr x22
         """
-        return b"%s%s%s%s\x00\x00\x10\x8b\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
+        return b"%s%s%s%s\xd6\x02\x10\x8b\xff\x02\x00\x91\xc0\x02\x3f\xd6" % (
             jump_delay_buf,
             b"".join(reset),
-            self.mov_enc(0, entry_ptr),
-            self.mov_enc(1, stack_ptr)
+            self.mov_enc(22, entry_ptr),
+            self.mov_enc(23, stack_ptr)
         )
 
 class CodeGenX86(CodeGenerator):
