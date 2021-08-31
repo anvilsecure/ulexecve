@@ -627,6 +627,10 @@ class CodeGenerator:
 class CodeGenAarch64(CodeGenerator):
 
     def mov_enc(self, reg, value):
+        # this just generates the binary representation for mov commands by
+        # splitting up the mov in 4 move instructions if the value is large
+        # enough; register 0 is just x0, register 2 is x2 and so forth. I know
+        # it's hella dirty but hey it gets the job done.
         ret = []
         get_bin = lambda x, n: format(x, 'b').zfill(n)
         preamble = ["11010010100", "11110010101", "11110010110", "11110010111"]
@@ -660,19 +664,18 @@ class CodeGenAarch64(CodeGenerator):
 
     def memcpy_from_offset(self, off, src, sz):
         assert((sz % 4) == 0)
-
         """
-8b100021        add     x1, x1, x16
-8b020023        add     x3, x1, x2
+        8b100021        add     x1, x1, x16
+        8b020023        add     x3, x1, x2
 
-000000000000020c <loopstart>:
-eb01007f        cmp     x3, x1
-540000c3        b.cc 228 <loopend>  // b.hs, b.nlast
-f9400004        ldr     x4, [x0]
-f9000024        str     x4, [x1]
-91002000        add     x0, x0, #0x8
-91002021        add     x1, x1, #0x8
-17fffffa        b       20c <loopstart>
+        000000000000020c <loopstart>:
+        eb01007f        cmp     x3, x1
+        540000c3        b.cc 228 <loopend>  // b.hs, b.nlast
+        f9400004        ldr     x4, [x0]
+        f9000024        str     x4, [x1]
+        91002000        add     x0, x0, #0x8
+        91002021        add     x1, x1, #0x8
+        17fffffa        b       20c <loopstart>
         """
         insts = [0x8b100021, 0x8b020023,
                 0xeb01007f,
@@ -689,7 +692,6 @@ f9000024        str     x4, [x1]
         for inst in insts:
             buf.append(struct.pack("<L", inst))
 
-        buf.append(struct.pack("<L", 0xd503201f))
         self.log("Generated memcpy call (dst=%%x16 + 0x%.8x, src=0x%.8x, size=0x%.8x)" % (off, src, sz))
         return b"".join(buf)
 
