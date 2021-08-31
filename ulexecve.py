@@ -118,11 +118,12 @@ PT_LOAD = 0x1
 PT_INTERP = 0x3
 EM_X86_64 = 0x3e
 EM_386 = 0x3
+EM_AARCH64 = 0xb7
 
 
 def display_jumpbuf(machine, buf):
 
-    machines = {EM_386: "i386", EM_X86_64: "i386:x86-64"}
+    machines = {EM_386: "i386", EM_X86_64: "i386:x86-64", EM_AARCH64: "aarch64"}
     assert(machine in machines)
 
     with tempfile.NamedTemporaryFile(suffix=".jumpbuf.bin", mode="wb") as tmp:
@@ -235,8 +236,8 @@ class ELFParser:
         if self.e_phnum == 0:
             raise ELFParsingError("No program headers found in ELF")
 
-        if self.e_machine not in (EM_X86_64, EM_386):
-            raise ELFParsingError("ELF machine type is not x86-64")
+        if self.e_machine not in (EM_X86_64, EM_386, EM_AARCH64):
+            raise ELFParsingError("ELF machine type is not supported")
 
     def parse_pentries(self):
         self.stream.seek(self.e_phoff)
@@ -509,7 +510,7 @@ class CodeGenerator:
 
     @staticmethod
     def get_code_generator(exe, interp=None):
-        machines = {EM_386: CodeGenX86, EM_X86_64: CodeGenX86_64}
+        machines = {EM_386: CodeGenX86, EM_X86_64: CodeGenX86_64, EM_AARCH64: CodeGenAarch64}
         keys = machines.keys()
         assert(exe.e_machine in keys)
         if interp:
@@ -619,6 +620,65 @@ class CodeGenerator:
     def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
         raise NotImplementedError
 
+    def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
+        raise NotImplementedError
+
+
+class CodeGenAarch64(CodeGenerator):
+
+    def mov_enc(self, reg, value):
+        ret = []
+        get_bin = lambda x, n: format(x, 'b').zfill(n)
+        preamble = ["11010010100", "11110010101", "11110010110", "11110010111"]
+        for p in preamble:
+            buf = []
+            buf.append(p)
+            buf.append(get_bin(value & 0xffff, 16))
+            buf.append(get_bin(reg, 5))
+            ret.append("".join(buf))
+            value >>= 16
+            if value == 0:
+                break
+        return b"".join([struct.pack("<L", int(r, 2)) for r in ret])
+
+    def syscall(self, no):
+        return b"%s%s" % (
+                self.mov_enc(8, no),
+                struct.pack("<L", 0xd4000001)
+        )
+
+    def mprotect(self, addr, length, prot):
+        raise NotImplementedError
+
+    def munmap(self, addr, length):
+        buf = b"%s%s%s" % (
+                self.mov_enc(1, addr),
+                self.mov_enc(2, length),
+                self.syscall(215)
+        )
+        return buf
+
+    def memcpy_from_offset(self, off, src, sz):
+        return b""
+        raise NotImplementedError
+
+    def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
+        return b""
+        raise NotImplementedError
+
+    def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
+        return b""
+        raise NotImplementedError
+
+    def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
+        """
+            9100003f  mov sp, x1
+            d63f0000  blr x0
+        """
+        return b"%s%s\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
+            self.mov_enc(0, entry_ptr),
+            self.mov_enc(1, stack_ptr)
+        )
 
 class CodeGenX86(CodeGenerator):
     def __init__(self, exe, interp=None):
