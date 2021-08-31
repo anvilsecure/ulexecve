@@ -282,6 +282,7 @@ class ELFParser:
                     self.is_pie = True
 
             # store extracted program header data
+            buf = b"\x41"*p_filesz
             data = ctypes.create_string_buffer(buf)
             pentry = {"flags": p_flags, "memsz": p_memsz, "vaddr": p_vaddr, "filesz": p_filesz, "offset": p_offset, "data": data}
             self.ph_entries.append(pentry)
@@ -652,19 +653,63 @@ class CodeGenAarch64(CodeGenerator):
 
     def munmap(self, addr, length):
         buf = b"%s%s%s" % (
-                self.mov_enc(1, addr),
-                self.mov_enc(2, length),
+                self.mov_enc(0, addr),
+                self.mov_enc(1, length),
                 self.syscall(215)
         )
         return buf
 
     def memcpy_from_offset(self, off, src, sz):
-        return b""
-        raise NotImplementedError
+        assert((sz % 4) == 0)
+
+        """
+8b100021        add     x1, x1, x16
+8b020023        add     x3, x1, x2
+
+000000000000020c <loopstart>:
+eb01007f        cmp     x3, x1
+540000c2        b.cs    228 <loopend>  // b.hs, b.nlast
+f9400004        ldr     x4, [x0]
+f9000024        str     x4, [x1]
+91002000        add     x0, x0, #0x8
+91002021        add     x1, x1, #0x8
+17fffffa        b       20c <loopstart>
+        """
+        insts = [0x8b100021, 0x8b020023,
+                0xeb01007f, 0x540000c2,
+                0xf9400004, 0xf9000024,
+                0x91002000,
+                0x91002021,
+                0x17fffffa]
+        buf = [
+            self.mov_enc(1, off),
+            self.mov_enc(0, src),
+            self.mov_enc(2, sz)
+        ]
+        for inst in insts:
+            buf.append(struct.pack("<L", inst))
+
+        buf.append(struct.pack("<L", 0xd503201f))
+        self.log("Generated memcpy call (dst=%%x16 + 0x%.8x, src=0x%.8x, size=0x%.8x)" % (off, src, sz))
+        return b"".join(buf)
 
     def mmap(self, addr, length, prot, flags, fd=0xffffffff, offset=0):
-        return b""
-        raise NotImplementedError
+        # we store the mmap() result in %x16
+        """
+        400080:       aa0003f0        mov     x16, x0
+        """
+        buf = b"%s%s%s%s%s%s%s%s" % (
+                self.mov_enc(0, addr),
+                self.mov_enc(1, length),
+                self.mov_enc(2, prot),
+                self.mov_enc(3, flags),
+                self.mov_enc(4, fd),
+                self.mov_enc(5, offset),
+                self.syscall(222),
+                b"\xf0\x03\x00\xaa"
+        )
+        self.log("Generated mmap call (addr=0x%.8x, length=0x%.8x, prot=0x%x, flags=0x%x)" % (addr, length, prot, flags))
+        return buf
 
     def generate_auxv_fixup(self, stack, auxv_offset, map_offset, relative=True):
         return b""
@@ -672,10 +717,13 @@ class CodeGenAarch64(CodeGenerator):
 
     def generate_jumpcode(self, stack_ptr, entry_ptr, jump_delay=False):
         """
+            8b100000  add x0, x0, x16
             9100003f  mov sp, x1
             d63f0000  blr x0
         """
-        return b"%s%s\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
+        if jump_delay:
+            raise NotImplementedError("jumpcode not implemented yet for aarch64")
+        return b"%s%s\x00\x00\x10\x8b\x3f\x00\x00\x91\x00\x00\x3f\xd6" % (
             self.mov_enc(0, entry_ptr),
             self.mov_enc(1, stack_ptr)
         )
