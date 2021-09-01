@@ -26,6 +26,74 @@
 # SUCH DAMAGE.
 
 """
+ulexecve.py -- Userland execve implementation in Python
+
+This tool allows you to load arbitrary ELF binaries on Linux systems and
+execute them without the binaries ever having to touch storage nor using any
+easily monitored system calls such as execve(). This should make it ideal for
+red team engagements as well as other anti-forensics purposes.
+
+The design of the tool is fairly straightforward. It only uses standard CPython
+libraries and includes some backwards compatibility tricks to successfully run
+on 2.x releases as well as 3.x. When certain library calls are not implemented
+via libc on the platform this is running on they will be emulated. For example
+`getauxval()` or `memfd_create()`.
+
+It is an explicit design-goal of this tool to not have any external
+dependencies.  As such the assembly generation code can be seen to be pretty
+crude but this was very much preferred over pulling in external code generator
+libraries. Similarly for splitting up versions of this for different platforms
+or make it more stealthily by having less options or removing all the debug
+information. This is trivially doable for anyone who wants to really integrate
+this in their red-team tooling and it is not an explicit goal of this tool
+itself. If anything this is a reference implementation that can easily be
+adapted if you want to make smaller payloads for use in the real world.
+
+ELF binaries are parsed and the PT_LOAD segments are mapped into memory. We
+then have to generate a so-called jump buffer. This buffer will contain raw CPU
+instructions because the newly loaded binary will most likely overwrite parts
+of the Python process' memory regions. As such the moment we hand over control
+by starting to execute the jump buffer there is no way back and we will either
+crash and burn or successfully execute the reflected binary (assuming we have
+everything setup properly).
+
+The parsing and the builtup of the stack is all standard. Ultimately we call
+into a CPU-specific Code Generator. The tool will call `munmap()` for each
+memory segment in order to unmap any possible Python memory regions. Then
+`mmap()` calls are generated for each memory segment. The code generator for
+each CPU simply implements the system calls with the right arguments.
+
+We do not know always where the binaries are mapped if they are for example
+position independent binaries. As such each Code Generator will need to store
+the result of the main binary mmapp() in an intermediate register. For example
+on x86-64 we use %r11, on x86 %ecx and on aarch64 we use %x16.
+
+Then we proceed to do two things. First we generate `memcpy()` instructions
+which copy the ELF segments from the temporary Python ctypes buffers into the
+proper memory locations. This is done at the specified offset as parsed from
+the ELF file on top of the intermediate register as mentioned above.
+
+Secondly we now have to fix up the auxilliary vector to make sure that the
+entries AT_BASE, AT_PHDR, AT_ENTRY are properly setup.  This is to tie
+everything together for dynamic binaries and it ensures that the linker can do
+its job. For more information on this vector please refer to this LWN article
+https://lwn.net/Articles/519085/. We also forward on any other entries such as
+the location of the vDSO (AT_SYSINFO_EHDR) from the original process such that
+any calls by the binary into vDSO land work properly.
+
+Once the code generator is done we have a so-called jump buffer. This jump
+buffer can be disassembled directly via `--show-jumpbuf`. It simply uses
+`objdump` under the hood. The script transfers control from Python-land to the
+jump buffer. The built up instructions will be executed and ultimately the
+control will be transfered to the newly loaded binary.
+
+Obviously one can always compile binaries which will not work or which might
+crash. As such you simply have to sit back and pray. However the implementation
+is pretty well tested, includes unit-tests for static and dynamic binaries, as
+well as PIE-compiled executables or executables with different runtimes such as
+Rust or Go. Simply run the included `./test.py`
+
+-- Vincent Berg <gvb@anvilsecure.com>
 """
 
 import argparse
@@ -563,7 +631,8 @@ class CodeGenerator:
             prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
             # TODO: implement mprotect() call to properly setup protection
-            # flags againfor memory segments
+            # flags again for memory segments; right now this is not used
+            # nor implemented at all
             # code = self.mprotect(dst, PAGE_CEIL(memsz), prot)
             # ret.append(code)
 
@@ -634,7 +703,10 @@ class CodeGenAarch64(CodeGenerator):
         # enough; register 0 is just x0, register 2 is x2 and so forth. I know
         # it's hella dirty but hey it gets the job done.
         ret = []
-        get_bin = lambda x, n: format(x, 'b').zfill(n)
+
+        def get_bin(x, n):
+            return format(x, 'b').zfill(n)
+
         preamble = ["11010010100", "11110010101", "11110010110", "11110010111"]
         for p in preamble:
             buf = []
@@ -649,8 +721,8 @@ class CodeGenAarch64(CodeGenerator):
 
     def syscall(self, no):
         return b"%s%s" % (
-                self.mov_enc(8, no),
-                struct.pack("<L", 0xd4000001)
+            self.mov_enc(8, no),
+            struct.pack("<L", 0xd4000001)
         )
 
     def mprotect(self, addr, length, prot):
@@ -658,9 +730,9 @@ class CodeGenAarch64(CodeGenerator):
 
     def munmap(self, addr, length):
         buf = b"%s%s%s" % (
-                self.mov_enc(0, addr),
-                self.mov_enc(1, length),
-                self.syscall(215)
+            self.mov_enc(0, addr),
+            self.mov_enc(1, length),
+            self.syscall(215)
         )
         return buf
 
@@ -678,13 +750,8 @@ class CodeGenAarch64(CodeGenerator):
         91002021        add     x1, x1, #0x8
         17fffffa        b       20c <loopstart>
         """
-        insts = [0x8b100021, 0x8b020023,
-                0xeb01007f,
-                0x540000c3,
-                0xf9400004, 0xf9000024,
-                0x91002000,
-                0x91002021,
-                0x17fffffa]
+        insts = [0x8b100021, 0x8b020023, 0xeb01007f, 0x540000c3, 0xf9400004,
+                 0xf9000024, 0x91002000, 0x91002021, 0x17fffffa]
         buf = [
             self.mov_enc(1, off),
             self.mov_enc(0, src),
@@ -702,14 +769,14 @@ class CodeGenAarch64(CodeGenerator):
         400080:       aa0003f0        mov     x16, x0
         """
         buf = b"%s%s%s%s%s%s%s%s" % (
-                self.mov_enc(0, addr),
-                self.mov_enc(1, length),
-                self.mov_enc(2, prot),
-                self.mov_enc(3, flags),
-                self.mov_enc(4, fd),
-                self.mov_enc(5, offset),
-                self.syscall(222),
-                b"\xf0\x03\x00\xaa"
+            self.mov_enc(0, addr),
+            self.mov_enc(1, length),
+            self.mov_enc(2, prot),
+            self.mov_enc(3, flags),
+            self.mov_enc(4, fd),
+            self.mov_enc(5, offset),
+            self.syscall(222),
+            b"\xf0\x03\x00\xaa"
         )
         self.log("Generated mmap call (addr=0x%.8x, length=0x%.8x, prot=0x%x, flags=0x%x)" % (addr, length, prot, flags))
         return buf
@@ -741,7 +808,7 @@ class CodeGenAarch64(CodeGenerator):
             d4000001        svc     #0x0
             """
             insts = [0xd2800001, 0xa90007e0, 0x910003e0,
-                    0xd2800ca8, 0xd4000001]
+                     0xd2800ca8, 0xd4000001]
             buf = [self.mov_enc(0, jump_delay)]
             for inst in insts:
                 buf.append(struct.pack("<L", inst))
@@ -765,6 +832,7 @@ class CodeGenAarch64(CodeGenerator):
             self.mov_enc(22, entry_ptr),
             self.mov_enc(23, stack_ptr)
         )
+
 
 class CodeGenX86(CodeGenerator):
     def __init__(self, exe, interp=None):
@@ -946,11 +1014,15 @@ class CodeGenX86_64(CodeGenerator):
 
     def memcpy_from_offset(self, off, src, sz):
         """
-        48 bf 48 47 46 45 44    movabs $0x4142434445464748,%rdi
-        43 42 41
+        48 be a0 14 88 02 00    movabs $0x28814a0,%rsi
+        00 00 00
+        48 bf 00 00 00 00 00    movabs $0x0,%rdi
+        00 00 00
         4c 01 df                add    %r11,%rdi
+        48 b9 c8 0f 00 00 00    movabs $0xfc8,%rcx
+        00 00 00
+        f3 a4                   rep movsb %ds:(%rsi),%es:(%rdi)
         """
-        # TODO fix up the comment above
         buf = b"\x48\xbe%s\x48\xbf%s\x4c\x01\xdf\x48\xb9%s\xf3\xa4" % (
             struct.pack("<Q", src),
             struct.pack("<Q", off),
