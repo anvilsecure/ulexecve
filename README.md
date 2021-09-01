@@ -14,6 +14,8 @@ No good implementations of a Python userland *execve()* exist. There is *SELF* [
 
 All the common ELF parsing logic, setting up the stack, mapping the ELF segments and setting up the jump buffers is abstracted away so it is fairly easy (in the order of a couple of hours) to port to another CPU. Porting it to other ELF based platforms such as the BSDs might be a bit more involved but should still be fairly straightforward. For more information on to do so just check the comments in the code.
 
+# Installation
+
 ## To install via pip
 
 Although this makes little sense from an anti-forensics perspective the tool is installable via `pip`.
@@ -37,7 +39,7 @@ curl -o ulexecve.py https://raw.githubusercontent.com/anvilventures/ulexecve/doc
 ./ulexecve.py --help
 ```
 
-## Usage
+# Usage
 
 The tool fully supports static and dynamically compiled executables. Simply pass the filename of the binary to `ulexecve` and any arguments you want to supply to the binary. The environment will be directly copied over from the environment in which you execute `ulexecve`.
 
@@ -87,6 +89,14 @@ hello
 ```
 
 There is always the `--fallback` option. It is not as stealthy as parsing and mapping in the binaries in userland ourselves. The fallback method uses `memfd_create()` and `fexecve()` but it should work 100% of time for executing arbitrary static or dynamic binaries. Provided the supplied binaries are the right binaries for the platform you are on obviously.
+
+# Limitations
+
+Obviously you can always end up with binaries which will not be executed properly. However this implementation is pretty clean and well tested (it includes unit-tests for static and dynamic binaries, PIE-compiled executables and executables with different runtimes such as Rust or Go). For most tools and binaries on the mentioned platforms it should do the trick. But your mileage may vary.
+
+# Porting
+
+When porting to a different platform make sure that the small amount of unit-tests all work. Simply run the included `./test.py` on the target platform and fix up everything up until all these tests succeed again.
 
 # Bugs, comments, suggestions
 
