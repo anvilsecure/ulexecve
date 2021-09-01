@@ -1,6 +1,6 @@
 # Quick Start
 
-Execute arbitrary dynamic or statically compiled ELF Linux binaries without ever calling execve().
+Execute dynamic or statically compiled ELF Linux binaries without ever calling execve().
 
 ```
 cat /bin/echo | ulexecve - hello
