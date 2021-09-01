@@ -14,6 +14,8 @@ No good implementations of a Python userland *execve()* exist. There is *SELF* [
 
 All the common ELF parsing logic, setting up the stack, mapping the ELF segments and setting up the jump buffers is abstracted away so it is fairly easy (in the order of a couple of hours) to port to another CPU. Porting it to other ELF based platforms such as the BSDs might be a bit more involved but should still be fairly straightforward. For more information on to do so just check the comments in the code.
 
+Please note that it is an explicit design goal to have no external dependencies and to have everything implemented in a single source code file. If you are so inclined to make smaller payloads it should be fairly trivial to remove support for cetain CPU types as well as rip out all the debug information and options.
+
 # Installation
 
 ## To install via pip
