@@ -26,6 +26,59 @@
 # SUCH DAMAGE.
 
 """
+ulexecve.py -- Userland execve() implementation in Python
+
+The design of the tool is fairly straightforward. It only uses standard CPython
+libraries and includes some backwards compatibility tricks to successfully run
+on 2.x releases as well as 3.x. When certain library calls are not implemented
+via libc on the platform this is running on they will be emulated. For example
+`getauxval()` or `memfd_create()`.
+
+ELF binaries are parsed and the PT_LOAD segments are mapped into memory. We
+then have to generate a so-called jump buffer. This buffer will contain raw CPU
+instructions because the newly loaded binary will most likely overwrite parts
+of the Python process' memory regions. As such the moment we hand over control
+by starting to execute the jump buffer there is no way back and we will either
+crash and burn or successfully execute the reflected binary (assuming we have
+everything setup properly).
+
+The parsing and the builtup of the stack is all standard. Ultimately we call
+into a CPU-specific Code Generator. The tool will call `munmap()` for each
+memory segment in order to unmap any possible Python memory regions. Then
+`mmap()` calls are generated for each memory segment. The code generator for
+each CPU simply implements the system calls with the right arguments.
+
+We do not know always where the binaries are mapped if they are for example
+position independent binaries. As such each Code Generator will need to store
+the result of the main binary mmapp() in an intermediate register. For example
+on x86-64 we use %r11, on x86 %ecx and on aarch64 we use %x16.
+
+Then we proceed to do two things. First we generate `memcpy()` instructions
+which copy the ELF segments from the temporary Python ctypes buffers into the
+proper memory locations. This is done at the specified offset as parsed from
+the ELF file on top of the intermediate register as mentioned above.
+
+Secondly we now have to fix up the auxilliary vector to make sure that the
+entries AT_BASE, AT_PHDR, AT_ENTRY are properly setup.  This is to tie
+everything together for dynamic binaries and it ensures that the linker can do
+its job. For more information on this vector please refer to this LWN article
+https://lwn.net/Articles/519085/. We also forward on any other entries such as
+the location of the vDSO (AT_SYSINFO_EHDR) from the original process such that
+any calls by the binary into vDSO land work properly.
+
+Once the code generator is done we have a so-called jump buffer. This jump
+buffer can be disassembled directly via `--show-jumpbuf`. It simply uses
+`objdump` under the hood. The script transfers control from Python-land to the
+jump buffer. The built up instructions will be executed and ultimately the
+control will be transfered to the newly loaded binary.
+
+Obviously one can always compile binaries which will not work or which might
+crash. As such you simply have to sit back and pray. However the implementation
+is pretty well tested, includes unit-tests for static and dynamic binaries, as
+well as PIE-compiled executables or executables with different runtimes such as
+Rust or Go. Simply run the included `./test.py`
+
+-- Vincent Berg <gvb@anvilsecure.com>
 """
 
 import argparse
