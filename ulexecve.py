@@ -1014,11 +1014,15 @@ class CodeGenX86_64(CodeGenerator):
 
     def memcpy_from_offset(self, off, src, sz):
         """
-        48 bf 48 47 46 45 44    movabs $0x4142434445464748,%rdi
-        43 42 41
+        48 be a0 14 88 02 00    movabs $0x28814a0,%rsi
+        00 00 00
+        48 bf 00 00 00 00 00    movabs $0x0,%rdi
+        00 00 00
         4c 01 df                add    %r11,%rdi
+        48 b9 c8 0f 00 00 00    movabs $0xfc8,%rcx
+        00 00 00
+        f3 a4                   rep movsb %ds:(%rsi),%es:(%rdi)
         """
-        # TODO fix up the comment above
         buf = b"\x48\xbe%s\x48\xbf%s\x4c\x01\xdf\x48\xb9%s\xf3\xa4" % (
             struct.pack("<Q", src),
             struct.pack("<Q", off),
