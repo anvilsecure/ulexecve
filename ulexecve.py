@@ -26,7 +26,12 @@
 # SUCH DAMAGE.
 
 """
-ulexecve.py -- Userland execve() implementation in Python
+ulexecve.py -- Userland execve implementation in Python
+
+This tool allows you to load arbitrary ELF binaries on Linux systems and
+execute them without the binaries ever having to touch storage nor using any
+easily monitored system calls such as execve(). This should make it ideal for
+red team engagements as well as other anti-forensics purposes.
 
 The design of the tool is fairly straightforward. It only uses standard CPython
 libraries and includes some backwards compatibility tricks to successfully run
@@ -39,9 +44,10 @@ dependencies.  As such the assembly generation code can be seen to be pretty
 crude but this was very much preferred over pulling in external code generator
 libraries. Similarly for splitting up versions of this for different platforms
 or make it more stealthily by having less options or removing all the debug
-information.  This is trivially doable for anyone who wants to really integrate
+information. This is trivially doable for anyone who wants to really integrate
 this in their red-team tooling and it is not an explicit goal of this tool
-itself.
+itself. If anything this is a reference implementation that can easily be
+adapted if you want to make smaller payloads for use in the real world.
 
 ELF binaries are parsed and the PT_LOAD segments are mapped into memory. We
 then have to generate a so-called jump buffer. This buffer will contain raw CPU
@@ -625,7 +631,8 @@ class CodeGenerator:
             prot |= (PROT_EXEC if (flags & PF_X) != 0 else 0)
 
             # TODO: implement mprotect() call to properly setup protection
-            # flags againfor memory segments
+            # flags again for memory segments; right now this is not used
+            # nor implemented at all
             # code = self.mprotect(dst, PAGE_CEIL(memsz), prot)
             # ret.append(code)
 
@@ -696,7 +703,10 @@ class CodeGenAarch64(CodeGenerator):
         # enough; register 0 is just x0, register 2 is x2 and so forth. I know
         # it's hella dirty but hey it gets the job done.
         ret = []
-        get_bin = lambda x, n: format(x, 'b').zfill(n)
+
+        def get_bin(x, n):
+            return format(x, 'b').zfill(n)
+
         preamble = ["11010010100", "11110010101", "11110010110", "11110010111"]
         for p in preamble:
             buf = []
