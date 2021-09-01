@@ -27,7 +27,7 @@ setuptools.setup(
     description="Userland execve utility",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/anvilventures/ulexecve",
+    url="https://github.com/anvilsecure/ulexecve",
     keywords="userland execve",
     py_modules=[NAME],
     classifiers=[
