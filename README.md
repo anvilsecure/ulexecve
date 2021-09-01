@@ -10,10 +10,9 @@ In modern container environments this is definitely not always possible anymore.
 
 This is also the reason the tool is all implemented in just one file. This should make it easier to download it on target systems and not have to worry about installing any other dependencies before being able to run it. The tool is tested with Python 2.7 even though this Python version is deprecated. There are many systems still out there with 2.x versions so this is useful.
 
-No good implementations of a Python userland *execve()* exist. There is *SELF* [3] which was not extensively documented, lacked easy debugging options but more importantly didn't work at all. This implementation was written from scratch. It parses the ELF file, loads and parses the dynamic linker as well if needed, maps everything into memory and constructs a jump buffer containing CPU instructions to ultimately transfer control from the Python process directly to the newly loaded binary.
+No good implementations of a Python userland *execve()* exist. There is *SELF* [3] which was not extensively documented, lacked easy debugging options but more importantly didn't work at all. The `ulexecve` implementation was written from scratch. It parses the ELF file, loads and parses the dynamic linker as well (if needed), maps all segments into memory and ultimately constructs a jump buffer containing CPU instructions to ultimately transfer control from the Python process directly to the newly loaded binary.
 
 All the common ELF parsing logic, setting up the stack, mapping the ELF segments and setting up the jump buffers is abstracted away so it is fairly easy (in the order of a couple of hours) to port to another CPU. Porting it to other ELF based platforms such as the BSDs might be a bit more involved but should still be fairly straightforward. For more information on to do so just check the comments in the code.
-
 
 ## To install via pip
 
@@ -29,20 +28,31 @@ ulexecve --help
 ```
 python setup.py sdist
 python -m pip install --upgrade dist/ulexecve-<version>.tar.gz
+ulexecve --help
 ```
 
+## To download and run via curl
+```
+curl -o ulexecve.py https://raw.githubusercontent.com/anvilventures/ulexecve/docs/ulexecve.py
+./ulexecve.py --help
+```
 
 ## Usage
 
-The tool fully supports static and dynamically compiled executables. Simply pass the filename of the binary to `ulexecve` and any arguments you want to supply to the binary. You can have it read a binary from `stdin` if you specify `-` as the filename. The environment will be directly copied over from the environment in which you execute the binary.
+The tool fully supports static and dynamically compiled executables. Simply pass the filename of the binary to `ulexecve` and any arguments you want to supply to the binary. The environment will be directly copied over from the environment in which you execute `ulexecve`.
 
 ```
 ulexecve /bin/ls -lha
+```
+
+You can have it read a binary from `stdin` if you specify `-` as the filename.
+
+```
 ...
 cat /bin/ls | ulexecve - -lha
 ```
 
-To debug several options are available. If you get a crash you can show debug informationi via `--debug`, the built up stack via `--show-stack` as well as the generated jump buffer `--show-jumpbuf`. The `--jump-delay` option is very useful if you want to parse and map an ELF properly and then attach a debugger to step through the jump buffer and the ultimate binary to find the cause of the crash.
+To debug several options are available. If you get a crash you can show debug information via `--debug`, the built up stack via `--show-stack` as well as the generated jump buffer `--show-jumpbuf`. The `--jump-delay` option is very useful if you want to parse and map an ELF properly and then attach a debugger to step through the jump buffer and the ultimate binary to find the cause of the crash.
 
 
 ```
@@ -76,7 +86,7 @@ Memmove(0x7fddf6f0e000, 0x0254d7f0, 0x00000250)
 hello
 ```
 
-There is always the `--fallback` option. It is not as stealthy as parsing and mapping in the binaries in userland ourselves. The fallback method uses `memfd_create()` and `fexecve()` but it should work 100% of time for executing arbitrary static or dynamic binaries (provided they are the right binaries for the platform you are trying to execute them on obviously).
+There is always the `--fallback` option. It is not as stealthy as parsing and mapping in the binaries in userland ourselves. The fallback method uses `memfd_create()` and `fexecve()` but it should work 100% of time for executing arbitrary static or dynamic binaries. Provided the supplied binaries are the right binaries for the platform you are on obviously.
 
 # Bugs, comments, suggestions
 
