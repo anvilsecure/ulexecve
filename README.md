@@ -1,3 +1,12 @@
+# Quick Start
+
+Execute arbitrary dynamic or statically compiled ELF Linux binaries without ever calling execve().
+
+```
+cat /bin/echo | ulexecve - hello
+hello
+```
+
 # Introduction
 
 This Python tool is called `ulexecve` and it stands for *userland execve*. It helps you execute arbitrary ELF binaries on Linux systems from userland without ever calling the *execve()* systemcall. In other words: you can execute arbitrary binaries directly from memory without ever having to write them to storage. This is very useful from an anti-forensic or red-teaming perspective and enables you to move around more stealthily while still dropping compiled binaries on target machines. The tool works on CPython 3.x as well as CPython 2.7 (and possibly earlier) on the supported Linux platforms (`x86`, `x86-64` and `aarch64`). Both static and dynamically compiled ELF binaries are supported. Of course there will always be a small subset of binaries which may not work or result in a crash and for these a 100% reliable fallback method is implemented on top of the modern `memfd_create()` system call.
@@ -10,11 +19,11 @@ In modern container environments this is definitely not always possible anymore.
 
 This is also the reason the tool is all implemented in just one file. This should make it easier to download it on target systems and not have to worry about installing any other dependencies before being able to run it. The tool is tested with Python 2.7 even though this Python version is deprecated. There are many systems still out there with 2.x versions so this is useful.
 
-No good implementations of a Python userland *execve()* exist. There is *SELF* [3] which was not extensively documented, lacked easy debugging options but more importantly didn't work at all. The `ulexecve` implementation was written from scratch. It parses the ELF file, loads and parses the dynamic linker as well (if needed), maps all segments into memory and ultimately constructs a jump buffer containing CPU instructions to ultimately transfer control from the Python process directly to the newly loaded binary.
+No good other implementations of a Python userland *execve()* existed. There is *SELF* [3] which was not extensively documented, lacked easy debugging options but more importantly didn't work at all. The `ulexecve` implementation was written from scratch. It parses the ELF file, loads and parses the dynamic linker as well (if needed), maps all segments into memory and ultimately constructs a jump buffer containing CPU instructions to ultimately transfer control from the Python process directly to the newly loaded binary.
 
 All the common ELF parsing logic, setting up the stack, mapping the ELF segments and setting up the jump buffers is abstracted away so it is fairly easy (in the order of a couple of hours) to port to another CPU. Porting it to other ELF based platforms such as the BSDs might be a bit more involved but should still be fairly straightforward. For more information on to do so just check the comments in the code.
 
-Please note that it is an explicit design goal to have no external dependencies and to have everything implemented in a single source code file. If you are so inclined to make smaller payloads it should be fairly trivial to remove support for cetain CPU types as well as rip out all the debug information and options.
+Please note that it is an explicit design goal to have no external dependencies and to have everything implemented in a single source code file. If you need to make smaller payloads it should be fairly trivial to remove support for cetain CPU types or rip out all the debug information and other options.
 
 # Installation
 
@@ -52,15 +61,15 @@ ulexecve /bin/ls -lha
 You can have it read a binary from `stdin` if you specify `-` as the filename.
 
 ```
-...
 cat /bin/ls | ulexecve - -lha
 ```
 
-To debug several options are available. If you get a crash you can show debug information via `--debug`, the built up stack via `--show-stack` as well as the generated jump buffer `--show-jumpbuf`. The `--jump-delay` option is very useful if you want to parse and map an ELF properly and then attach a debugger to step through the jump buffer and the ultimate binary to find the cause of the crash.
+To debug several options are available. If you get a crash you can show debug information via `--debug`, the built up stack via `--show-stack` as well as the generated jump buffer `--show-jumpbuf`. The `--jump-delay` option is very useful if you want to parse and map an ELF properly and then attach a debugger to step through the jump buffer and the ultimate executing binary to find the cause of the crash.
 
 
 ```
 cat /bin/echo | ulexecve --debug --show-stack --show-jumpbuf - hello
+...
 PT_LOAD at offset 0x0002c520: flags=0x6, vaddr=0x2d520, filesz=0x1ad8, memsz=0x1c70
 Loaded interpreter successfully
 Stack allocated at: 0x7fddf630e000
@@ -73,8 +82,6 @@ stack contents:
 ...
 Generated mmap call (addr=0x00000000, length=0x00030000, prot=0x7, flags=0x22)
 Generated memcpy call (dst=%r11 + 0x00000000, src=0x02534650, size=0x00000fc8)
-Generated memcpy call (dst=%r11 + 0x00001000, src=0x0255e2b0, size=0x00022674)
-Generated memcpy call (dst=%r11 + 0x00024000, src=0x02543910, size=0x00007ccc)
 Generated memcpy call (dst=%r11 + 0x0002d520, src=0x0253d720, size=0x00001ad8)
 Generating jumpcode with entry_point=0x00001100 and stack=0x7fddf630e000
 Jumpbuf with entry %r11+0x1100 and stack: 0x00007fddf630e000
