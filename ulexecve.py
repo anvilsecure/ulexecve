@@ -34,6 +34,15 @@ on 2.x releases as well as 3.x. When certain library calls are not implemented
 via libc on the platform this is running on they will be emulated. For example
 `getauxval()` or `memfd_create()`.
 
+It is an explicit design-goal of this tool to not have any external
+dependencies.  As such the assembly generation code can be seen to be pretty
+crude but this was very much preferred over pulling in external code generator
+libraries. Similarly for splitting up versions of this for different platforms
+or make it more stealthily by having less options or removing all the debug
+information.  This is trivially doable for anyone who wants to really integrate
+this in their red-team tooling and it is not an explicit goal of this tool
+itself.
+
 ELF binaries are parsed and the PT_LOAD segments are mapped into memory. We
 then have to generate a so-called jump buffer. This buffer will contain raw CPU
 instructions because the newly loaded binary will most likely overwrite parts
@@ -702,8 +711,8 @@ class CodeGenAarch64(CodeGenerator):
 
     def syscall(self, no):
         return b"%s%s" % (
-                self.mov_enc(8, no),
-                struct.pack("<L", 0xd4000001)
+            self.mov_enc(8, no),
+            struct.pack("<L", 0xd4000001)
         )
 
     def mprotect(self, addr, length, prot):
@@ -711,9 +720,9 @@ class CodeGenAarch64(CodeGenerator):
 
     def munmap(self, addr, length):
         buf = b"%s%s%s" % (
-                self.mov_enc(0, addr),
-                self.mov_enc(1, length),
-                self.syscall(215)
+            self.mov_enc(0, addr),
+            self.mov_enc(1, length),
+            self.syscall(215)
         )
         return buf
 
@@ -731,13 +740,8 @@ class CodeGenAarch64(CodeGenerator):
         91002021        add     x1, x1, #0x8
         17fffffa        b       20c <loopstart>
         """
-        insts = [0x8b100021, 0x8b020023,
-                0xeb01007f,
-                0x540000c3,
-                0xf9400004, 0xf9000024,
-                0x91002000,
-                0x91002021,
-                0x17fffffa]
+        insts = [0x8b100021, 0x8b020023, 0xeb01007f, 0x540000c3, 0xf9400004,
+                 0xf9000024, 0x91002000, 0x91002021, 0x17fffffa]
         buf = [
             self.mov_enc(1, off),
             self.mov_enc(0, src),
@@ -755,14 +759,14 @@ class CodeGenAarch64(CodeGenerator):
         400080:       aa0003f0        mov     x16, x0
         """
         buf = b"%s%s%s%s%s%s%s%s" % (
-                self.mov_enc(0, addr),
-                self.mov_enc(1, length),
-                self.mov_enc(2, prot),
-                self.mov_enc(3, flags),
-                self.mov_enc(4, fd),
-                self.mov_enc(5, offset),
-                self.syscall(222),
-                b"\xf0\x03\x00\xaa"
+            self.mov_enc(0, addr),
+            self.mov_enc(1, length),
+            self.mov_enc(2, prot),
+            self.mov_enc(3, flags),
+            self.mov_enc(4, fd),
+            self.mov_enc(5, offset),
+            self.syscall(222),
+            b"\xf0\x03\x00\xaa"
         )
         self.log("Generated mmap call (addr=0x%.8x, length=0x%.8x, prot=0x%x, flags=0x%x)" % (addr, length, prot, flags))
         return buf
@@ -794,7 +798,7 @@ class CodeGenAarch64(CodeGenerator):
             d4000001        svc     #0x0
             """
             insts = [0xd2800001, 0xa90007e0, 0x910003e0,
-                    0xd2800ca8, 0xd4000001]
+                     0xd2800ca8, 0xd4000001]
             buf = [self.mov_enc(0, jump_delay)]
             for inst in insts:
                 buf.append(struct.pack("<L", inst))
@@ -818,6 +822,7 @@ class CodeGenAarch64(CodeGenerator):
             self.mov_enc(22, entry_ptr),
             self.mov_enc(23, stack_ptr)
         )
+
 
 class CodeGenX86(CodeGenerator):
     def __init__(self, exe, interp=None):
