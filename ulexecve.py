@@ -413,7 +413,7 @@ class Stack:
     OFFSET_AT_ENTRY = 5
 
     def __init__(self, num_pages, is_32bit=False):
-        self.size = 2048 * PAGE_SIZE
+        self.size = num_pages * PAGE_SIZE
         self.base = mmap(0, self.size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_GROWSDOWN, -1, 0)
         ctypes.memset(self.base, 0, self.size)
 
