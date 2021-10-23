@@ -64,6 +64,12 @@ You can have it read a binary from `stdin` if you specify `-` as the filename.
 cat /bin/ls | ulexecve - -lha
 ```
 
+To download a binary into memory and immediately execute it you can use `--download`. This will interpret the filename argument as a URI.
+
+```
+ulexecve --download http://host/binary
+```
+
 To debug several options are available. If you get a crash you can show debug information via `--debug`, the built up stack via `--show-stack` as well as the generated jump buffer `--show-jumpbuf`. The `--jump-delay` option is very useful if you want to parse and map an ELF properly and then attach a debugger to step through the jump buffer and the ultimate executing binary to find the cause of the crash.
 
 

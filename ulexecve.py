@@ -157,6 +157,33 @@ def _readbytes_from_stdin():
         raise Exception("unexpected Python version found")
 
 
+def _readbytes_from_url(url):
+    if sys.version_info.major == 2:
+        import StringIO
+        import urllib
+        sio = StringIO.StringIO()
+        try:
+            urlfd = urllib.urlopen(url)
+        except Exception as e:
+            raise Exception("couldn't download from url: %s" % e)
+        sio.write(urlfd.read())
+        sio.seek(0)
+        return sio
+    elif sys.version_info.major == 3:
+        import io
+        import urllib.request
+        bio = io.BytesIO()
+        try:
+            urlfd = urllib.request.urlopen(url)
+        except Exception as e:
+            raise Exception("couldn't download from url: %s" % e)
+        bio.write(urlfd.read())
+        bio.seek(0)
+        return bio
+    else:
+        raise Exception("unexpected Python version found")
+
+
 # If we run on glibc older than 2.16 we would not have getauxval(), we could
 # then try to emulate it by reading from /proc/<pid>/auxv. That glibc version
 # was released in late 2012 though but let's try and support older or different
@@ -1240,6 +1267,7 @@ def main():
                                      usage="%(prog)s [options] <binary> [arguments]")
 
     parser.add_argument("--debug", action="store_true", help="output info useful for debugging a crashing binary")
+    parser.add_argument("--download", action="store_true", help="treat <binary> as URI to fetch binary from before execution")
     parser.add_argument("--fallback", action="store_true", help="use fallback method with memfd_create")
     parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
@@ -1285,11 +1313,17 @@ def main():
     binary = ns.command[0]
     args = ns.command[1:]
 
-    if binary == "-":
-        binfd = _readbytes_from_stdin()
-        binary = "<stdin>"
+    if ns.download:
+        if not binary.startswith("http://") and not binary.startswith("https://"):
+            logging.error("only http/https URIs allowed")
+            sys.exit(1)
+        binfd = _readbytes_from_url(binary)
     else:
-        binfd = open(binary, "rb")
+        if binary == "-":
+            binfd = _readbytes_from_stdin()
+            binary = "<stdin>"
+        else:
+            binfd = open(binary, "rb")
 
     if ns.fallback:
         executor = MemFdExecutor(binfd, binary)
