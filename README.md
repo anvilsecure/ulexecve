@@ -46,7 +46,7 @@ ulexecve --help
 
 ## To download and run via curl
 ```
-curl -o ulexecve.py https://raw.githubusercontent.com/anvilventures/ulexecve/docs/ulexecve.py
+curl -o ulexecve.py https://raw.githubusercontent.com/anvilsecure/ulexecve/docs/ulexecve.py
 ./ulexecve.py --help
 ```
 
