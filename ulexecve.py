@@ -101,6 +101,8 @@ import ctypes
 import errno
 import logging
 import os
+import random
+import string
 import struct
 import subprocess
 import sys
@@ -1270,8 +1272,10 @@ def main():
     parser.add_argument("--download", action="store_true", help="treat <binary> as URI to fetch binary from before execution")
     parser.add_argument("--fallback", action="store_true", help="use fallback method with memfd_create")
     parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
+    parser.add_argument("--pyi-fallback", action="store_true", help="use less stealthy fallback for PyInstaller binaries")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
     parser.add_argument("--show-stack", action="store_true", help="show stack contents")
+    parser.add_argument("--tmpdir", help="temp dir to use (only for --pyi-fallback)", default="/tmp")
     parser.add_argument("--version", action="store_true", help="show version")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="<binary> [arguments] (eg. /bin/ls /tmp)")
     ns = parser.parse_args(sys.argv[1:])
@@ -1296,6 +1300,17 @@ def main():
         if ns.show_stack:
             logging.error("cannot use --show-stack with --fallback")
             sys.exit(1)
+
+    if ns.pyi_fallback:
+        pse = "/proc/self/exe"
+        lpse = len(pse)
+        if len(ns.tmpdir) > lpse - 2:
+            logging.error("temp path cannot be too long")
+            sys.exit(1)
+        # generate random string for the parts of the path we control
+        cnt = lpse - len(ns.tmpdir) - 1
+        rstr = b"".join((random.choice(string.ascii_letters + string.digits) for _ in range(cnt)))
+        ns.pyi_fallback_path = os.path.join(ns.tmpdir, rstr)
 
     if ns.jump_delay:
         if ns.jump_delay < 0:
@@ -1324,6 +1339,34 @@ def main():
             binary = "<stdin>"
         else:
             binfd = open(binary, "rb")
+
+    if ns.pyi_fallback:
+        # read in the entire binary in memory, modify the path to
+        # /proc/self/exe and just pray we don't find it more than once and then
+        # write this out to our identified temporary location and use that as
+        # the binary we are about to execute
+        data = binfd.read()
+        pse = b"/proc/self/exe"
+        if data.find(pse) == -1:
+            logging.error("no /proc/self/exe string found")
+            sys.exit(1)
+        data = data.replace(pse, ns.pyi_fallback_path)
+        with open(ns.pyi_fallback_path, "wb+") as fd:
+            fd.write(data)
+            binary = ns.pyi_fallback_path
+            binfd = open(binary, "rb")
+        os.chmod(ns.pyi_fallback_path, 0o700)
+
+        # fork and wait for child process to finish
+        pid = os.fork()
+        if pid == -1:
+            logging.error("could not fork for watchdog process")
+            sys.exit(1)
+        elif pid != 0:
+            os.waitpid(pid, 0)
+            logging.debug("process done executing: unlinking temp bin from %s" % binary)
+            os.unlink(binary)
+            sys.exit(0)
 
     if ns.fallback:
         executor = MemFdExecutor(binfd, binary)
