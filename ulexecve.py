@@ -1375,8 +1375,16 @@ def main():
 
         logging.debug("Symlink location set to %s" % path)
 
-        # read in the binary fully and try to find the string
         data = binfd.read()
+
+        # To be sure check if it even looks like a PyInstaller binary and see
+        # if we can find the MAGIC value that PyInstaller uses.
+        magic = b"MEI\014\013\012\013\016"
+        if data.find(magic) == -1:
+            logging.error("This binary does not look like a PyInstaller generated binary")
+            sys.exit(1)
+
+        # Find string (to make sure it is there) and replace all occurrences
         if data.find(pse) == -1:
             logging.error("No %s string found" % pse)
             sys.exit(1)
