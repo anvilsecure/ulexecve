@@ -1301,23 +1301,17 @@ def main():
             logging.error("cannot use --show-stack with --fallback")
             sys.exit(1)
 
-    if ns.pyi_fallback:
-        pse = "/proc/self/exe"
-        lpse = len(pse)
-        if len(ns.tmpdir) > lpse - 2:
-            logging.error("temp path cannot be too long")
-            sys.exit(1)
-        # generate random string for the parts of the path we control
-        cnt = lpse - len(ns.tmpdir) - 1
-        rstr = b"".join((random.choice(string.ascii_letters + string.digits) for _ in range(cnt)))
-        ns.pyi_fallback_path = os.path.join(ns.tmpdir, rstr)
-
     if ns.jump_delay:
         if ns.jump_delay < 0:
             logging.error("jump delay cannot be negative")
             sys.exit(1)
         elif ns.jump_delay > 300:
             logging.error("jump delay cannot be bigger than 300")
+            sys.exit(1)
+
+    if ns.tmpdir:
+        if not os.path.exists(ns.tmpdir):
+            logging.error("--tmpdir %s does not exist" % ns.tmpdir)
             sys.exit(1)
 
     # sanity check where we are being run
@@ -1341,30 +1335,86 @@ def main():
             binfd = open(binary, "rb")
 
     if ns.pyi_fallback:
-        # read in the entire binary in memory, modify the path to
-        # /proc/self/exe and just pray we don't find it more than once and then
-        # write this out to our identified temporary location and use that as
-        # the binary we are about to execute
-        data = binfd.read()
-        pse = b"/proc/self/exe"
-        if data.find(pse) == -1:
-            logging.error("no /proc/self/exe string found")
-            sys.exit(1)
-        data = data.replace(pse, ns.pyi_fallback_path)
-        with open(ns.pyi_fallback_path, "wb+") as fd:
-            fd.write(data)
-            binary = ns.pyi_fallback_path
-            binfd = open(binary, "rb")
-        os.chmod(ns.pyi_fallback_path, 0o700)
+        # PyInstaller has an embedded archive that it tries to resolve by
+        # opening up /proc/self/exe which is something we cannot fake unless
+        # we have CAP_SYS_RESOURCE and teh ability to call prctl() with
+        # PR_SET_MM_EXE_FILE so we can make it point to the original binary
+        # instead of the Python interpreter.
+        #
+        # However we can attempt to replace any occurence of the string
+        # /proc/self/exe and point to a path we control. This does require us
+        # to have a place where we can write on the filesystem. So /tmp is a
+        # good choice by default. We check if we can create a file within the
+        # directory specified tmpdir. The resulting path should be as long as
+        # /proc/self/exe so that we can blindly do a string replace in the
+        # PyInstaller compiled binary.
+        #
+        # If we replace /proc/self/exe with a longer string we would cause
+        # SIGSEGVs all over the place or we would be forced to rewrite the ELF
+        # structure and the instructions partially which is a massive amount of
+        # work and definitely not worth it. The following approach is rather
+        # braindead but on systems where there is a short path that we can
+        # write to this trick will work just fine.
 
-        # fork and wait for child process to finish
+        # strip all trailing / so we have a clean path
+        ns.tmpdir = ns.tmpdir.rstrip("/")
+        if len(ns.tmpdir) == 0:
+            ns.tmpdir = "/"
+
+        # check path length and if we have enough space to create a symlink
+        pse = "/proc/self/exe"
+        lpse = len(pse)
+        if len(ns.tmpdir) > lpse - 2:
+            logging.error("temp path cannot be too long")
+            sys.exit(1)
+
+        # generate random string for the parts of the path we control
+        cnt = lpse - len(ns.tmpdir) - 1
+        rstr = b"".join((random.choice(string.ascii_letters + string.digits) for _ in range(cnt)))
+        path = os.path.join(ns.tmpdir, rstr)
+
+        logging.debug("Symlink location set to %s" % path)
+
+        # read in the binary fully and try to find the string
+        data = binfd.read()
+        if data.find(pse) == -1:
+            logging.error("No %s string found" % pse)
+            sys.exit(1)
+        data = data.replace(pse, path)
+
+        # create a file decriptor in memory, write the changed binary to it
+        memfd_create = MemFdExecutor._get_memfd_create_fn()
+        fd = memfd_create(b"", 0x1)
+        sz = len(data)
+        if fd == -1:
+            logging.error("memfd_create() failed so cannot do pyi fallback method")
+            sys.exit(1)
+        ret = libc.write(fd, data, sz)
+        if ret != sz:
+            logging.error("Failed to write all data to memfd so bailing out")
+            sys.exit(1)
+
+        # link open /proc/<pid>/fd/<fd> to the random path we constructed above
+        try:
+            os.symlink("/proc/%i/fd/%i" % (os.getpid(), fd), path)
+        except OSError:
+            logging.error("Failed to create symlink. No write permissions maybe?")
+            sys.exit(1)
+
+        binfd = os.fdopen(fd, "rb")
+        binary = path
+
+        # Fork and wait for child process to finish so we can cleane up and
+        # remove the symlink after we are done. We don't need to clean up the
+        # modified binary whatsoever as that one only lives in memory within
+        # the parent process.
         pid = os.fork()
         if pid == -1:
-            logging.error("could not fork for watchdog process")
+            logging.error("Could not fork for watchdog process")
             sys.exit(1)
         elif pid != 0:
             os.waitpid(pid, 0)
-            logging.debug("process done executing: unlinking temp bin from %s" % binary)
+            logging.debug("Process done executing: unlinking temp bin from %s" % binary)
             os.unlink(binary)
             sys.exit(0)
 
