@@ -1370,7 +1370,7 @@ def main():
 
         # generate random string for the parts of the path we control
         cnt = lpse - len(ns.tmpdir) - 1
-        rstr = b"".join((random.choice(string.ascii_letters + string.digits) for _ in range(cnt)))
+        rstr = "".join((random.choice(string.ascii_letters + string.digits) for _ in range(cnt)))
         path = os.path.join(ns.tmpdir, rstr)
 
         logging.debug("Symlink location set to %s" % path)
@@ -1385,10 +1385,11 @@ def main():
             sys.exit(1)
 
         # Find string (to make sure it is there) and replace all occurrences
+        pse = pse.encode("utf-8")
         if data.find(pse) == -1:
             logging.error("No %s string found" % pse)
             sys.exit(1)
-        data = data.replace(pse, path)
+        data = data.replace(pse, path.encode("utf-8"))
 
         # create a file decriptor in memory, write the changed binary to it
         memfd_create = MemFdExecutor._get_memfd_create_fn()
