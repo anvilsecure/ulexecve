@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2021-2022, Anvil Secure Inc.
+# Copyright (c) 2021-2023, Anvil Secure Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -101,6 +101,8 @@ import ctypes
 import errno
 import logging
 import os
+import random
+import string
 import struct
 import subprocess
 import sys
@@ -109,7 +111,7 @@ from ctypes import (POINTER, c_char_p, c_int, c_long, c_size_t, c_uint,
                     c_ulong, c_void_p, memmove, sizeof)
 from ctypes.util import find_library
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 libc = ctypes.CDLL(find_library('c'), use_errno=True)
 
@@ -1270,8 +1272,10 @@ def main():
     parser.add_argument("--download", action="store_true", help="treat <binary> as URI to fetch binary from before execution")
     parser.add_argument("--fallback", action="store_true", help="use fallback method with memfd_create")
     parser.add_argument("--jump-delay", metavar="N", type=int, help="delay jump with N seconds to f.e. attach debugger")
+    parser.add_argument("--pyi-fallback", action="store_true", help="use less stealthy fallback for PyInstaller binaries")
     parser.add_argument("--show-jumpbuf", action="store_true", help="use objdump to show jumpbuf contents")
     parser.add_argument("--show-stack", action="store_true", help="show stack contents")
+    parser.add_argument("--tmpdir", help="temp dir to use (only for --pyi-fallback)", default="/tmp")
     parser.add_argument("--version", action="store_true", help="show version")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="<binary> [arguments] (eg. /bin/ls /tmp)")
     ns = parser.parse_args(sys.argv[1:])
@@ -1305,6 +1309,11 @@ def main():
             logging.error("jump delay cannot be bigger than 300")
             sys.exit(1)
 
+    if ns.tmpdir:
+        if not os.path.exists(ns.tmpdir):
+            logging.error("--tmpdir %s does not exist" % ns.tmpdir)
+            sys.exit(1)
+
     # sanity check where we are being run
     if os.name != "posix" or os.uname()[0].lower() != "linux":
         logging.error("this only works on Linux-based operating systems")
@@ -1324,6 +1333,99 @@ def main():
             binary = "<stdin>"
         else:
             binfd = open(binary, "rb")
+
+    if ns.pyi_fallback:
+        # PyInstaller has an embedded archive that it tries to resolve by
+        # opening up /proc/self/exe which is something we cannot fake unless
+        # we have CAP_SYS_RESOURCE and teh ability to call prctl() with
+        # PR_SET_MM_EXE_FILE so we can make it point to the original binary
+        # instead of the Python interpreter.
+        #
+        # However we can attempt to replace any occurence of the string
+        # /proc/self/exe and point to a path we control. This does require us
+        # to have a place where we can write on the filesystem. So /tmp is a
+        # good choice by default. We check if we can create a file within the
+        # directory specified tmpdir. The resulting path should be as long as
+        # /proc/self/exe so that we can blindly do a string replace in the
+        # PyInstaller compiled binary.
+        #
+        # If we replace /proc/self/exe with a longer string we would cause
+        # SIGSEGVs all over the place or we would be forced to rewrite the ELF
+        # structure and the instructions partially which is a massive amount of
+        # work and definitely not worth it. The following approach is rather
+        # braindead but on systems where there is a short path that we can
+        # write to this trick will work just fine.
+
+        # strip all trailing / so we have a clean path
+        ns.tmpdir = ns.tmpdir.rstrip("/")
+        if len(ns.tmpdir) == 0:
+            ns.tmpdir = "/"
+
+        # check path length and if we have enough space to create a symlink
+        pse = "/proc/self/exe"
+        lpse = len(pse)
+        if len(ns.tmpdir) > lpse - 2:
+            logging.error("temp path cannot be too long")
+            sys.exit(1)
+
+        # generate random string for the parts of the path we control
+        cnt = lpse - len(ns.tmpdir) - 1
+        rstr = "".join((random.choice(string.ascii_letters + string.digits) for _ in range(cnt)))
+        path = os.path.join(ns.tmpdir, rstr)
+
+        logging.debug("Symlink location set to %s" % path)
+
+        data = binfd.read()
+
+        # To be sure check if it even looks like a PyInstaller binary and see
+        # if we can find the MAGIC value that PyInstaller uses.
+        magic = b"MEI\014\013\012\013\016"
+        if data.find(magic) == -1:
+            logging.error("This binary does not look like a PyInstaller generated binary")
+            sys.exit(1)
+
+        # Find string (to make sure it is there) and replace all occurrences
+        pse = pse.encode("utf-8")
+        if data.find(pse) == -1:
+            logging.error("No %s string found" % pse)
+            sys.exit(1)
+        data = data.replace(pse, path.encode("utf-8"))
+
+        # create a file decriptor in memory, write the changed binary to it
+        memfd_create = MemFdExecutor._get_memfd_create_fn()
+        fd = memfd_create(b"", 0x1)
+        sz = len(data)
+        if fd == -1:
+            logging.error("memfd_create() failed so cannot do pyi fallback method")
+            sys.exit(1)
+        ret = libc.write(fd, data, sz)
+        if ret != sz:
+            logging.error("Failed to write all data to memfd so bailing out")
+            sys.exit(1)
+
+        # link open /proc/<pid>/fd/<fd> to the random path we constructed above
+        try:
+            os.symlink("/proc/%i/fd/%i" % (os.getpid(), fd), path)
+        except OSError:
+            logging.error("Failed to create symlink. No write permissions maybe?")
+            sys.exit(1)
+
+        binfd = os.fdopen(fd, "rb")
+        binary = path
+
+        # Fork and wait for child process to finish so we can cleane up and
+        # remove the symlink after we are done. We don't need to clean up the
+        # modified binary whatsoever as that one only lives in memory within
+        # the parent process.
+        pid = os.fork()
+        if pid == -1:
+            logging.error("Could not fork for watchdog process")
+            sys.exit(1)
+        elif pid != 0:
+            os.waitpid(pid, 0)
+            logging.debug("Process done executing: unlinking temp bin from %s" % binary)
+            os.unlink(binary)
+            sys.exit(0)
 
     if ns.fallback:
         executor = MemFdExecutor(binfd, binary)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2021-2022, Anvil Secure Inc.
+# Copyright (c) 2021-2023, Anvil Secure Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -255,6 +255,26 @@ class TestFallback(unittest.TestCase):
         output = subprocess.check_output(cmd, shell=True)
         self.assertNotEqual(output.find(os.path.basename(py_fn).encode("utf-8")), -1)
 
+
+class TestPyInstaller(unittest.TestCase):
+    def test_pyinstaller(self):
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="wb") as out:
+            out.write(b"print('hello')\n")
+            out.flush()
+            cmd = "pyinstaller -F -c --clean %s --workpath /tmp/_workpath --distpath /tmp/_distpath --specpath /tmp 2>&1 >> /dev/null" % (out.name)
+            output = subprocess.check_output(cmd, shell=True)
+
+            py_fn = u.__file__
+            cmd = "cat /tmp/_distpath/%s | %s %s --pyi-fallback -" % (os.path.basename(out.name[:-3]), python_bin, py_fn)
+            output = subprocess.check_output(cmd, shell=True)
+            self.assertEqual("hello\n".encode("utf-8"), output)
+
+        # invalid non-pyinstaller bin should fail
+        cmd = "cat /bin/ls | %s %s --pyi-fallback - 2>&1" % (python_bin, py_fn)
+        try:
+            output = subprocess.check_output(cmd, shell=True)
+        except subprocess.CalledProcessError:
+            pass
 
 if __name__ == "__main__":
     unittest.main()

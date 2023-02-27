@@ -107,7 +107,22 @@ There is always the `--fallback` option. It is not as stealthy as parsing and ma
 
 # Limitations
 
-Obviously you can always end up with binaries which will not be executed properly. However this implementation is pretty clean and well tested (it includes unit-tests for static and dynamic binaries, PIE-compiled executables and executables with different runtimes such as Rust or Go). For most tools and binaries on the mentioned platforms it should do the trick. But your mileage may vary.
+Obviously you can always end up with binaries which will not be executed properly. However this implementation is pretty clean and well tested (it includes unit-tests for static and dynamic binaries, PIE-compiled executables and executables with different runtimes such as Rust or Go). For most tools and binaries on the mentioned platforms it should do the trick. But your mileage may vary. Binaries that are produced by installation packers that embed other information inside the ELFs might not work properly depending on the self-referencing tricks they use. For PyInstaller binaries however a specific fallback was added to ulexecve.
+
+## PyInstaller binaries
+
+Binaries which are created with PyInstaller will not work directly. These binaries require an accompanying package file or, in most cases, embed within the ELF the extra data needed to unpack and run properly after starting the embedded Python interpreter. This means that they cannot be made to work properly. There are a few ways of getting around this. A simple way, that may work in a subset of real world cases, assumes there is a writeable temp filesystem out there. Then we replace the string `/proc/self/exe` in the binary with `/tmp/xxxx`. After that we load the binary in memory via `memfd_create()` and then point the symlink at `/tmp/xxxx` to `/proc/<pid>/fd/<fd>` to the in-memory file. To try this option use `--pyi-fallback`. If you need to specify a specific other temporary directory use `--tmpdir`. Please note that the resulting path including the tmpdir has to be the exact same amount of bytes long as is the string `/proc/self/exe` (14 bytes) so longer paths won't work.
+
+```
+$ cat > h.py
+print("hello")
+$ pyinstaller -F -c h.py
+...
+$ cat ./tmp/dist/h  | ./ulexecve.py -
+[5064] Cannot open PyInstaller archive from executable (/usr/bin/python2.7) or external archive (/usr/bin/python2.7.pkg)
+$ cat ./tmp/dist/h  | ./ulexecve.py --pyi-fallback -
+hello
+```
 
 # Porting
 
