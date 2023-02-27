@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2021-2022, Anvil Secure Inc.
+# Copyright (c) 2021-2023, Anvil Secure Inc.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
