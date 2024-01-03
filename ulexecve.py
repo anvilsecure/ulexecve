@@ -875,7 +875,7 @@ class CodeGenX86(CodeGenerator):
 
     def munmap(self, addr, length):
         """
-        b8 0b 00 00 00       	mov    $0xb,%eax
+        b8 5b 00 00 00       	mov    $0x5b,%eax
         bb 66 66 00 00       	mov    $0x6666,%ebx
         51                   	push   %ecx
         b9 42 42 00 00       	mov    $0x4242,%ecx
